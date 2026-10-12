@@ -2095,6 +2095,26 @@
     setInterval(() => { if (state.outbox.length) syncOutbox(); }, 60000);
   }
 
+  // Ha a böngésző még a régi index.html-t adja az új app.js mellé (gyorsítótár),
+  // egyszer frissen újratöltjük az oldalt, ahelyett hogy hibára futnánk.
+  async function reloadFresh() {
+    let n = 0;
+    try { n = Number(sessionStorage.getItem("freshReload") || 0); } catch (_) {}
+    if (n >= 2) {
+      toast("A frissítés még töltődik. Zárd be az appot, és pár perc múlva nyisd meg újra.", 10000);
+      return;
+    }
+    try { sessionStorage.setItem("freshReload", String(n + 1)); } catch (_) {}
+    try { await fetch("./index.html", { cache: "reload" }); } catch (_) {}
+    try { if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } } catch (_) {}
+    location.replace(location.pathname + "?v=" + Date.now() + location.hash);
+  }
+  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid")) {
+    reloadFresh();
+    return;
+  }
+  try { sessionStorage.removeItem("freshReload"); } catch (_) {}
+
   start().catch((e) => {
     console.error(e);
     toast("Indítási hiba: " + errText(e), 6000);

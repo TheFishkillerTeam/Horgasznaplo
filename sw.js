@@ -1,6 +1,6 @@
 // Horgásznapló – service worker: az app offline is elindul.
 // Új verzió feltöltésekor a CACHE_VERSION számát növeld meg!
-const CACHE_VERSION = "horgasznaplo-v5";
+const CACHE_VERSION = "horgasznaplo-v6";
 const APP_SHELL = [
   "./",
   "./index.html",
@@ -45,7 +45,9 @@ self.addEventListener("fetch", (event) => {
   const fromCache = () =>
     caches.match(req, { ignoreSearch: true }).then((hit) => hit || caches.match("./index.html"));
 
-  const network = fetch(req).then((res) => {
+  // cache: "no-cache" – a böngésző mindig rákérdez a szerveren, van-e újabb változat
+  // (különben új app.js mellé régi index.html is jöhetne).
+  const network = fetch(req, { cache: "no-cache" }).then((res) => {
     if (res && res.ok) {
       const copy = res.clone();
       caches.open(CACHE_VERSION).then((c) => c.put(req, copy));
