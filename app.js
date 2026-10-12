@@ -227,7 +227,8 @@
   function showTab(tabId) {
     $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== tabId));
     $$("#bottomNav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
-    if (tabId === "tabLog") renderLog();
+    if (tabId === "tabLog") { renderLog(); updatePushHint(); }
+    if (tabId === "tabGallery") renderGallery();
     if (tabId === "tabStats") renderStats();
     if (tabId === "tabNew" && !state.gps && !state.editing && isRecentTime()) requestGps(true);
     window.scrollTo(0, 0);
@@ -366,6 +367,8 @@
     resetForm();
     fillDatalists();
     showTab("tabNew");
+    updatePushMenu();
+    openCatchFromHash();
   }
 
   async function refreshData() {
@@ -392,6 +395,7 @@
       fillDatalists();
       if (!$("#tabLog").classList.contains("hidden")) renderLog();
       if (!$("#tabStats").classList.contains("hidden")) renderStats();
+      if (!$("#tabGallery").classList.contains("hidden")) renderGallery();
     } catch (e) {
       console.warn("Frissítés sikertelen:", e);
     }
@@ -470,7 +474,7 @@
     btn.disabled = true;
     msg.textContent = "Küldés…";
     try {
-      const redirectTo = new URL("./", location.href).href;
+      const redirectTo = APP_URL;
       const { error } = await state.sb.auth.resetPasswordForEmail(email, { redirectTo });
       if (error) throw error;
       msg.className = "msg ok";
@@ -556,16 +560,61 @@
     else renderLocation();
   }
 
+  // ------------------------------------------------------------------
+  // Fotók az űrlapon (legfeljebb MAX_PHOTOS, egy közülük a listakép)
+  // state.photos: [{ id, blob?, path?, url, objUrl? }], state.coverId
+  // ------------------------------------------------------------------
+  const MAX_PHOTOS = 6;
+  let photoSeq = 0;
+
   function clearPhoto() {
-    if (state.photo && state.photo.url) URL.revokeObjectURL(state.photo.url);
-    state.photo = null;
-    $("#photoPreview").classList.add("hidden");
-    $("#photoPreview").removeAttribute("src");
-    $("#photoEmpty").classList.remove("hidden");
-    $("#btnPhotoRemove").classList.add("hidden");
+    (state.photos || []).forEach((p) => { if (p.objUrl) URL.revokeObjectURL(p.objUrl); });
+    state.photos = [];
+    state.coverId = null;
     $("#photoCamera").value = "";
     $("#photoGallery").value = "";
     setPhotoMsg("");
+    renderPhotoGrid();
+  }
+
+  function addFormPhoto(p) {
+    p.id = ++photoSeq;
+    state.photos.push(p);
+    if (state.coverId == null) state.coverId = p.id;
+  }
+
+  function renderPhotoGrid() {
+    const g = $("#photoGrid");
+    const list = state.photos || [];
+    if (!list.length) {
+      g.innerHTML = `<div class="ph-empty">Nincs fotó</div>`;
+    } else {
+      g.innerHTML = list.map((p) => {
+        const cover = p.id === state.coverId;
+        return `<div class="ph${cover ? " cover" : ""}" data-pid="${p.id}">
+          ${p.url ? `<img src="${esc(p.url)}" alt="">` : ""}
+          <button type="button" class="ph-btn star${cover ? " on" : ""}" data-star="${p.id}" aria-label="Legyen ez a listakép" title="Legyen ez a listakép">${cover ? "★" : "☆"}</button>
+          <button type="button" class="ph-btn del" data-del="${p.id}" aria-label="Fotó törlése" title="Fotó törlése">✕</button>
+          ${cover ? `<div class="ph-label">Listakép</div>` : ""}
+        </div>`;
+      }).join("");
+    }
+    const full = list.length >= MAX_PHOTOS;
+    ["#lblCamera", "#lblGallery"].forEach((sel) => $(sel).classList.toggle("hidden", full));
+  }
+
+  function onPhotoGridClick(e) {
+    const star = e.target.closest("[data-star]");
+    const del = e.target.closest("[data-del]");
+    if (star) { state.coverId = Number(star.dataset.star); renderPhotoGrid(); }
+    if (del) {
+      const id = Number(del.dataset.del);
+      const p = state.photos.find((x) => x.id === id);
+      if (p && p.objUrl) URL.revokeObjectURL(p.objUrl);
+      state.photos = state.photos.filter((x) => x.id !== id);
+      if (state.coverId === id) state.coverId = state.photos.length ? state.photos[0].id : null;
+      renderPhotoGrid();
+    }
   }
 
   // Fotó kicsinyítése (max. 1600 px, JPEG) – kíméli az adatforgalmat és a tárhelyet
@@ -608,39 +657,79 @@
     m.className = "msg" + (text ? (isErr ? " err" : " ok") : "");
   }
 
-  async function onPhotoPicked(ev) {
-    const input = ev.target;
-    const file = input.files && input.files[0];
-    if (!file) return;
-    setPhotoMsg("Fotó feldolgozása…");
-    let blob = null;
+  async function prepareImage(file) {
+    let blob = null, note = "";
     try { blob = await compressImage(file); }
     catch (_) {
       try { blob = await compressViaBitmap(file); } catch (_) { blob = null; }
     }
-    // Ha a telefon nem tudja kicsinyíteni (pl. ritka formátum), az eredeti fájlt mentjük, max. 10 MB-ig
-    let note = "";
+    // Ha a telefon nem tudja kicsinyíteni (pl. HEIC), az eredeti fájlt mentjük, max. 10 MB-ig
     if (!blob) {
       const heic = /hei[cf]/i.test(file.type) || /\.hei[cf]$/i.test(file.name || "");
       if (heic && file.size > 0 && file.size <= 10 * 1024 * 1024) {
         blob = new Blob([file], { type: file.type || "image/heic" });
-        note = "A fotót eredeti méretben mentem (a kicsinyítés ezen a készüléken nem sikerült).";
+        note = "eredeti méretben";
       } else {
-        setPhotoMsg(`A fotó nem dolgozható fel (${file.type || "ismeretlen formátum"}, ${Math.round(file.size / 1024)} kB). Próbálj másik fotót választani.`, true);
-        input.value = "";
-        return;
+        throw new Error(`A fotó nem dolgozható fel (${file.type || "ismeretlen formátum"}, ${Math.round(file.size / 1024)} kB).`);
       }
     }
-    clearPhoto();
-    state.photoRemoved = false;
-    state.photo = { blob, url: URL.createObjectURL(blob) };
-    const img = $("#photoPreview");
-    img.onerror = () => setPhotoMsg("Az előnézet nem jeleníthető meg, de a fotó a fogással együtt mentésre kerül.", false);
-    img.src = state.photo.url;
-    img.classList.remove("hidden");
-    $("#photoEmpty").classList.add("hidden");
-    $("#btnPhotoRemove").classList.remove("hidden");
-    setPhotoMsg(note || `Fotó csatolva (${Math.round(blob.size / 1024)} kB).`, false);
+    return { blob, note };
+  }
+
+  async function onPhotoPicked(ev) {
+    const input = ev.target;
+    const files = Array.from(input.files || []);
+    input.value = "";
+    if (!files.length) return;
+    const room = MAX_PHOTOS - state.photos.length;
+    if (room <= 0) { setPhotoMsg(`Legfeljebb ${MAX_PHOTOS} fotó csatolható.`, true); return; }
+    const take = files.slice(0, room);
+    setPhotoMsg(take.length > 1 ? `${take.length} fotó feldolgozása…` : "Fotó feldolgozása…");
+    let added = 0; const errors = [];
+    for (const f of take) {
+      try {
+        const { blob } = await prepareImage(f);
+        const objUrl = URL.createObjectURL(blob);
+        addFormPhoto({ blob, url: objUrl, objUrl });
+        added++;
+      } catch (e) { errors.push(errText(e)); }
+    }
+    renderPhotoGrid();
+    const skipped = files.length - take.length;
+    const parts = [];
+    if (added) parts.push(`${added} fotó csatolva (összesen ${state.photos.length}).`);
+    if (skipped) parts.push(`${skipped} fotó kimaradt: legfeljebb ${MAX_PHOTOS} csatolható.`);
+    if (errors.length) parts.push(errors[0] + " Próbálj másik fotót választani.");
+    setPhotoMsg(parts.join(" "), !added);
+  }
+
+  const extOf = (type) => ({ "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif" })[type] || "jpg";
+  async function uploadPhoto(blob, path) {
+    const type = blob.type || "image/jpeg";
+    const { error } = await state.sb.storage.from("photos").upload(path, blob, { contentType: type, upsert: true });
+    if (error) throw error;
+    return path;
+  }
+  // Ha a 3. verziós adatbázis-frissítés még nem futott le, a "photos" oszlop nélkül próbálja újra
+  const missingCol = (err, col) => err && new RegExp(col).test((err.message || "") + (err.details || "") + (err.hint || ""));
+
+  // Egy fogás fotói: feltöltött útvonalak (szerver) vagy helyi képek (várólista)
+  function catchPhotoPaths(c) {
+    if (Array.isArray(c.photos) && c.photos.length && typeof c.photos[0] === "string") return c.photos;
+    return c.photo_path ? [c.photo_path] : [];
+  }
+  function pendingPhotoBlobs(c) {
+    if (Array.isArray(c.photos) && c.photos.length && c.photos[0] && c.photos[0].blob) return c.photos.map((p) => p.blob);
+    return c.photo ? [c.photo] : [];
+  }
+  function photoCount(c) { return c._pending ? pendingPhotoBlobs(c).length : catchPhotoPaths(c).length; }
+  function coverPath(c) {
+    const paths = catchPhotoPaths(c);
+    return c.photo_path && paths.includes(c.photo_path) ? c.photo_path : paths[0] || c.photo_path || null;
+  }
+  function coverBlob(c) {
+    const b = pendingPhotoBlobs(c);
+    return b[Math.min(c.cover_index || 0, Math.max(0, b.length - 1))] || null;
   }
 
   // ------------------------------------------------------------------
@@ -830,7 +919,8 @@
     const item = Object.assign({
       client_id: uuid(),
       user_id: state.uid,
-      photo: state.photo && state.photo.blob ? state.photo.blob : null,
+      photos: state.photos.map((p) => ({ blob: p.blob })),
+      cover_index: Math.max(0, state.photos.findIndex((p) => p.id === state.coverId)),
       photo_path: null,
       weather: undefined,
       created_local: new Date().toISOString()
@@ -844,6 +934,7 @@
       toast(navigator.onLine ? "Mentve, feltöltés folyamatban…" : "Mentve a telefonra. A kapcsolat helyreállása után feltöltődik.");
       resetForm();
       syncOutbox();
+      openShare(Object.assign({ _pending: true }, item), true);
     } catch (e) {
       msg.className = "msg err";
       msg.textContent = "A mentés nem sikerült: " + errText(e);
@@ -875,15 +966,24 @@
     f.note.value = c.note || "";
     setLocation(c.lat != null ? { lat: Number(c.lat), lon: Number(c.lon), acc: c.accuracy_m, source: "saved" } : null);
 
-    // Meglévő fotó megjelenítése
-    let url = null;
-    if (pending && c.photo) url = URL.createObjectURL(c.photo);
-    else if (c.photo_path) url = await signedUrl(c.photo_path);
-    if (url || c.photo_path) {
-      state.photo = { existing: true, url };
-      if (url) { $("#photoPreview").src = url; $("#photoPreview").classList.remove("hidden"); $("#photoEmpty").classList.add("hidden"); }
-      $("#btnPhotoRemove").classList.remove("hidden");
+    // Meglévő fotók betöltése
+    if (pending) {
+      const blobs = pendingPhotoBlobs(c);
+      blobs.forEach((b, i) => {
+        const objUrl = URL.createObjectURL(b);
+        addFormPhoto({ blob: b, url: objUrl, objUrl });
+        if (i === (c.cover_index || 0)) state.coverId = photoSeq;
+      });
+    } else {
+      const paths = catchPhotoPaths(c);
+      const urls = await signedUrlsFor(paths);
+      const cov = coverPath(c);
+      paths.forEach((path) => {
+        addFormPhoto({ path, url: urls[path] || null });
+        if (path === cov) state.coverId = photoSeq;
+      });
     }
+    renderPhotoGrid();
 
     $("#formTitle").textContent = "Fogás szerkesztése";
     $("#btnCancelEdit").classList.remove("hidden");
@@ -907,8 +1007,6 @@
     const o = ed.original;
     const msg = $("#saveMsg");
     const btn = $("#btnSave");
-    const newPhoto = state.photo && state.photo.blob ? state.photo.blob : null;
-    const removePhoto = !!state.photoRemoved && !newPhoto;
     const sameTime = new Date(o.caught_at).getTime() === new Date(data.caught_at).getTime();
     const samePlace = (o.lat == null && data.lat == null) ||
       (o.lat != null && data.lat != null && Math.abs(o.lat - data.lat) < 1e-6 && Math.abs(o.lon - data.lon) < 1e-6);
@@ -922,8 +1020,10 @@
         const item = state.outbox.find((x) => x.client_id === ed.client_id);
         if (!item) throw new Error("A fogás közben feltöltődött. Nyisd meg újra a szerkesztést a naplóból.");
         Object.assign(item, data);
-        if (newPhoto) { item.photo = newPhoto; item.photo_path = null; }
-        if (removePhoto) { item.photo = null; item.photo_path = null; }
+        delete item.photo;
+        item.photos = state.photos.map((p) => ({ blob: p.blob }));
+        item.cover_index = Math.max(0, state.photos.findIndex((p) => p.id === state.coverId));
+        item.photo_path = null;
         if (weatherStale) item.weather = undefined;
         await idb.put("outbox", item);
         toast("Módosítás mentve.");
@@ -942,31 +1042,37 @@
           catch (we) { console.warn(we); toast("Az időjárási adat most nem kérhető le; a fogás időjárás nélkül módosult."); }
         }
       }
-      let oldPath = null;
-      if (newPhoto) {
-        const type = newPhoto.type || "image/jpeg";
-        const ext = ({ "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif" })[type] || "jpg";
-        const path = `${o.user_id}/${o.client_id}-${Date.now()}.${ext}`;
-        const { error: upErr } = await state.sb.storage.from("photos").upload(path, newPhoto, { contentType: type, upsert: true });
-        if (upErr) throw upErr;
-        row.photo_path = path;
-        oldPath = o.photo_path;
-      } else if (removePhoto) {
-        row.photo_path = null;
-        oldPath = o.photo_path;
+      // Fotók: az újakat feltöltjük, a sorrend és a listakép az űrlap szerint
+      const stamp = Date.now();
+      const finalPaths = [];
+      let coverP = null;
+      for (let i = 0; i < state.photos.length; i++) {
+        const ph = state.photos[i];
+        let path = ph.path;
+        if (!path) {
+          path = await uploadPhoto(ph.blob, `${o.user_id}/${o.client_id}-${stamp}-${i}.${extOf(ph.blob.type)}`);
+          ph.path = path;
+        }
+        finalPaths.push(path);
+        if (ph.id === state.coverId) coverP = path;
       }
+      row.photos = finalPaths;
+      row.photo_path = coverP || finalPaths[0] || null;
+      const removedPaths = catchPhotoPaths(o).filter((x) => !finalPaths.includes(x));
       row.updated_at = new Date().toISOString();
       row.updated_by = state.uid;
 
-      let { data: upd, error } = await state.sb.from("catches").update(row).eq("client_id", o.client_id).select("client_id");
-      if (error && /updated_(at|by)/.test(error.message || "")) {
+      const doUpdate = () => state.sb.from("catches").update(row).eq("client_id", o.client_id).select("client_id");
+      let { data: upd, error } = await doUpdate();
+      if (missingCol(error, "photos")) { delete row.photos; ({ data: upd, error } = await doUpdate()); }
+      if (missingCol(error, "updated_(at|by)")) {
         // A 2. verziós adatbázis-frissítés még nem futott le: módosítás a régi oszlopokkal
         delete row.updated_at; delete row.updated_by;
-        ({ data: upd, error } = await state.sb.from("catches").update(row).eq("client_id", o.client_id).select("client_id"));
+        ({ data: upd, error } = await doUpdate());
       }
       if (error) throw error;
       if (!upd || !upd.length) throw new Error("Nincs jogosultságod ennek a fogásnak a módosításához.");
-      if (oldPath) state.sb.storage.from("photos").remove([oldPath]).catch(() => {});
+      if (removedPaths.length) state.sb.storage.from("photos").remove(removedPaths).catch(() => {});
       toast("Módosítás mentve.");
       resetForm();
       await refreshData();
@@ -1063,6 +1169,42 @@
     const idx = Math.floor(f * 8 + 0.5) % 8;
     return { name: names[idx], icon: icons[idx], age_days: Math.round(age * 10) / 10, illum_pct: illum, idx };
   }
+  // ------------------------------------------------------------------
+  // Névnap: a nap első (fő) névnapja a magyar naptár szerint
+  // Forrás: több független névnaptár összevetése (2026.10.12.).
+  // Szökőévben február 24. a szökőnap; Mátyás 25-re, a többi egy nappal később kerül.
+  // ------------------------------------------------------------------
+  const NEVNAPOK = [
+    ["Fruzsina", "Ábel", "Genovéva", "Titusz", "Simon", "Boldizsár", "Attila", "Gyöngyvér", "Marcell", "Melánia", "Ágota", "Ernő", "Veronika", "Bódog", "Lóránt", "Gusztáv", "Antal", "Piroska", "Sára", "Fábián", "Ágnes", "Vince", "Zelma", "Timót", "Pál", "Vanda", "Angelika", "Károly", "Adél", "Martina", "Marcella"],
+    ["Ignác", "Karolina", "Balázs", "Ráhel", "Ágota", "Dorottya", "Tódor", "Aranka", "Abigél", "Elvira", "Bertold", "Lívia", "Ella", "Bálint", "Kolos", "Julianna", "Donát", "Bernadett", "Zsuzsanna", "Aladár", "Eleonóra", "Gerzson", "Alfréd", "Mátyás", "Géza", "Edina", "Ákos", "Elemér"],
+    ["Albin", "Lujza", "Kornélia", "Kázmér", "Adorján", "Leonóra", "Tamás", "Zoltán", "Franciska", "Ildikó", "Szilárd", "Gergely", "Krisztián", "Matild", "Kristóf", "Henrietta", "Gertrúd", "Sándor", "József", "Klaudia", "Benedek", "Beáta", "Emőke", "Gábor", "Irén", "Emánuel", "Hajnalka", "Gedeon", "Auguszta", "Zalán", "Árpád"],
+    ["Hugó", "Áron", "Buda", "Izidor", "Vince", "Vilmos", "Herman", "Dénes", "Erhard", "Zsolt", "Leó", "Gyula", "Ida", "Tibor", "Anasztázia", "Csongor", "Rudolf", "Andrea", "Emma", "Tivadar", "Konrád", "Csilla", "Béla", "György", "Márk", "Ervin", "Zita", "Valéria", "Péter", "Katalin"],
+    ["Fülöp", "Zsigmond", "Tímea", "Mónika", "Györgyi", "Ivett", "Gizella", "Mihály", "Gergely", "Ármin", "Ferenc", "Pongrác", "Szervác", "Bonifác", "Zsófia", "Mózes", "Paszkál", "Erik", "Ivó", "Bernát", "Konstantin", "Júlia", "Dezső", "Eszter", "Orbán", "Fülöp", "Hella", "Emil", "Magdolna", "Janka", "Angéla"],
+    ["Tünde", "Kármen", "Klotild", "Bulcsú", "Fatime", "Norbert", "Róbert", "Medárd", "Félix", "Margit", "Barnabás", "Villő", "Antal", "Vazul", "Jolán", "Jusztin", "Laura", "Arnold", "Gyárfás", "Rafael", "Alajos", "Paulina", "Zoltán", "Iván", "Vilmos", "János", "László", "Levente", "Péter", "Pál"],
+    ["Tihamér", "Ottó", "Kornél", "Ulrik", "Emese", "Csaba", "Apollónia", "Ellák", "Lukrécia", "Amália", "Nóra", "Izabella", "Jenő", "Örs", "Henrik", "Valter", "Endre", "Frigyes", "Emília", "Illés", "Dániel", "Magdolna", "Lenke", "Kinga", "Kristóf", "Anna", "Olga", "Szabolcs", "Márta", "Judit", "Oszkár"],
+    ["Boglárka", "Lehel", "Hermina", "Domonkos", "Krisztina", "Berta", "Ibolya", "László", "Emőd", "Lőrinc", "Zsuzsanna", "Klára", "Ipoly", "Marcell", "Mária", "Ábrahám", "Jácint", "Ilona", "Huba", "István", "Sámuel", "Menyhért", "Bence", "Bertalan", "Lajos", "Izsó", "Gáspár", "Ágoston", "Beatrix", "Rózsa", "Erika"],
+    ["Egyed", "Rebeka", "Hilda", "Rozália", "Viktor", "Zakariás", "Regina", "Mária", "Ádám", "Nikolett", "Teodóra", "Mária", "Kornél", "Szeréna", "Enikő", "Edit", "Zsófia", "Diána", "Vilhelmina", "Friderika", "Máté", "Móric", "Tekla", "Gellért", "Eufrozina", "Jusztina", "Adalbert", "Vencel", "Mihály", "Jeromos"],
+    ["Malvin", "Petra", "Helga", "Ferenc", "Aurél", "Brúnó", "Amália", "Koppány", "Dénes", "Gedeon", "Brigitta", "Miksa", "Kálmán", "Helén", "Teréz", "Gál", "Hedvig", "Lukács", "Nándor", "Vendel", "Orsolya", "Előd", "Gyöngyi", "Salamon", "Blanka", "Dömötör", "Szabina", "Simon", "Nárcisz", "Alfonz", "Farkas"],
+    ["Marianna", "Achilles", "Győző", "Károly", "Imre", "Lénárd", "Rezső", "Zsombor", "Tivadar", "Réka", "Márton", "Jónás", "Szilvia", "Aliz", "Albert", "Ödön", "Hortenzia", "Jenő", "Erzsébet", "Jolán", "Olivér", "Cecília", "Kelemen", "Emma", "Katalin", "Virág", "Virgil", "Stefánia", "Taksony", "András"],
+    ["Elza", "Melinda", "Ferenc", "Borbála", "Vilma", "Miklós", "Ambrus", "Mária", "Natália", "Judit", "Árpád", "Gabriella", "Luca", "Szilárda", "Valér", "Etelka", "Lázár", "Auguszta", "Viola", "Teofil", "Tamás", "Zénó", "Viktória", "Ádám", "Eugénia", "István", "János", "Kamilla", "Tamás", "Dávid", "Szilveszter"]
+  ];
+
+  function nameDayOf(date) {
+    const p = tzParts(date);
+    const y = Number(p.y), m = Number(p.m), d = Number(p.d);
+    const leap = (y % 4 === 0 && y % 100 !== 0) || y % 400 === 0;
+    if (m === 2 && leap) {
+      if (d === 24) return { name: null, note: "szökőnap" };
+      if (d >= 25) return { name: NEVNAPOK[1][d - 2] };
+    }
+    const name = (NEVNAPOK[m - 1] || [])[d - 1];
+    return { name: name || null };
+  }
+  function nameDayText(date) {
+    const n = nameDayOf(date);
+    return n.name ? n.name : (n.note === "szökőnap" ? "szökőnap" : "–");
+  }
+
   const MOON_NAMES = ["Újhold", "Növekvő sarló", "Első negyed", "Növekvő hold", "Telihold", "Fogyó hold", "Utolsó negyed", "Fogyó sarló"];
 
   function weatherLine(w) {
@@ -1100,17 +1242,17 @@
 
     for (const item of items) {
       try {
-        // 1. Fotó feltöltése
-        if (item.photo && !item.photo_path) {
-          const type = item.photo.type || "image/jpeg";
-          const ext = ({ "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif" })[type] || "jpg";
-          const path = `${state.uid}/${item.client_id}.${ext}`;
-          const { error } = await state.sb.storage.from("photos")
-            .upload(path, item.photo, { contentType: type, upsert: true });
-          if (error) throw error;
-          item.photo_path = path;
-          await idb.put("outbox", item);
+        // 1. Fotók feltöltése (a már feltöltöttek nem mennek fel újra)
+        if (item.photo && !item.photos) { item.photos = [{ blob: item.photo }]; item.cover_index = 0; delete item.photo; }
+        const phs = item.photos || [];
+        for (let i = 0; i < phs.length; i++) {
+          if (!phs[i].path) {
+            phs[i].path = await uploadPhoto(phs[i].blob, `${state.uid}/${item.client_id}-${i}.${extOf(phs[i].blob.type)}`);
+            await idb.put("outbox", item);
+          }
         }
+        const paths = phs.map((x) => x.path);
+        item.photo_path = paths[Math.min(item.cover_index || 0, Math.max(0, paths.length - 1))] || null;
         // 2. Időjárás (ha van pozíció). Ha nem sikerül, a fogás attól még felkerül.
         if (item.weather === undefined) {
           if (item.lat != null && item.lon != null) {
@@ -1139,11 +1281,14 @@
           lon: item.lon,
           accuracy_m: item.accuracy_m,
           photo_path: item.photo_path,
+          photos: paths.length ? paths : null,
           weather: item.weather
         };
-        const { error } = await state.sb.from("catches")
-          .upsert(row, { onConflict: "client_id", ignoreDuplicates: true });
+        const doUpsert = () => state.sb.from("catches").upsert(row, { onConflict: "client_id", ignoreDuplicates: true });
+        let { error } = await doUpsert();
+        if (missingCol(error, "photos")) { delete row.photos; ({ error } = await doUpsert()); }
         if (error) throw error;
+        notifyNewCatch(item.client_id);
 
         await idb.del("outbox", item.client_id);
         state.outbox = state.outbox.filter((x) => x.client_id !== item.client_id);
@@ -1197,13 +1342,199 @@
   }
 
   async function signedUrl(path) {
-    const hit = state.signedUrls[path];
-    if (hit && hit.exp > Date.now()) return hit.url;
-    if (!navigator.onLine) return null;
-    const { data, error } = await state.sb.storage.from("photos").createSignedUrl(path, 3600);
-    if (error || !data) return null;
-    state.signedUrls[path] = { url: data.signedUrl, exp: Date.now() + 50 * 60 * 1000 };
-    return data.signedUrl;
+    const r = await signedUrlsFor([path]);
+    return r[path] || null;
+  }
+
+  // Több fotó aláírt címe egyszerre (gyorsítótárral, 50 percig)
+  async function signedUrlsFor(paths) {
+    const out = {}, need = [];
+    const now = Date.now();
+    Array.from(new Set(paths.filter(Boolean))).forEach((p) => {
+      const hit = state.signedUrls[p];
+      if (hit && hit.exp > now) out[p] = hit.url; else need.push(p);
+    });
+    if (!need.length || !navigator.onLine || !state.sb) return out;
+    const bucket = state.sb.storage.from("photos");
+    try {
+      if (bucket.createSignedUrls) {
+        for (let i = 0; i < need.length; i += 100) {
+          const { data } = await bucket.createSignedUrls(need.slice(i, i + 100), 3600);
+          (data || []).forEach((d) => { if (d && d.signedUrl && d.path) { out[d.path] = d.signedUrl; state.signedUrls[d.path] = { url: d.signedUrl, exp: now + 50 * 60000 }; } });
+        }
+      } else {
+        await Promise.all(need.map(async (p) => {
+          const { data } = await bucket.createSignedUrl(p, 3600);
+          if (data && data.signedUrl) { out[p] = data.signedUrl; state.signedUrls[p] = { url: data.signedUrl, exp: now + 50 * 60000 }; }
+        }));
+      }
+    } catch (e) { console.warn("Fotócímek lekérése sikertelen:", e); }
+    return out;
+  }
+
+  // Egy fogás összes fotójának címe (helyi vagy aláírt), a listakép elöl
+  async function photoUrlsOf(c) {
+    if (c._pending) {
+      const blobs = pendingPhotoBlobs(c);
+      const ci = Math.min(c.cover_index || 0, Math.max(0, blobs.length - 1));
+      const ordered = blobs.length ? [blobs[ci]].concat(blobs.filter((_, i) => i !== ci)) : [];
+      return ordered.map((b) => URL.createObjectURL(b));
+    }
+    const paths = catchPhotoPaths(c);
+    const cov = coverPath(c);
+    const ordered = cov ? [cov].concat(paths.filter((x) => x !== cov)) : paths;
+    const urls = await signedUrlsFor(ordered);
+    return ordered.map((p) => urls[p]).filter(Boolean);
+  }
+
+  // ------------------------------------------------------------------
+  // Fotónéző (lapozható)
+  // ------------------------------------------------------------------
+  const viewer = { urls: [], i: 0, caption: "" };
+  function openViewer(urls, i, caption) {
+    if (!urls.length) return;
+    viewer.urls = urls; viewer.i = i || 0; viewer.caption = caption || "";
+    showViewer();
+    $("#photoModal").classList.remove("hidden");
+  }
+  function showViewer() {
+    const n = viewer.urls.length;
+    $("#photoModalImg").src = viewer.urls[viewer.i];
+    $("#viewerCaption").textContent = viewer.caption + (n > 1 ? `  (${viewer.i + 1}/${n})` : "");
+    $("#viewerPrev").classList.toggle("hidden", n < 2);
+    $("#viewerNext").classList.toggle("hidden", n < 2);
+  }
+  function stepViewer(d) {
+    const n = viewer.urls.length;
+    if (n < 2) return;
+    viewer.i = (viewer.i + d + n) % n;
+    showViewer();
+  }
+  function captionOf(c) {
+    const w = c.weight_kg != null ? ` – ${numFmt(c.weight_kg)} kg` : "";
+    return `${c.species}${w} · ${nameOf(c.user_id)} · ${c.water} · ${dtFmt(c.caught_at)}`;
+  }
+
+  // Napló nézet: "detail" (részletes kártyák) vagy "compact" (egy sor egy fogás)
+  function logView() {
+    if (!state.logView) {
+      try { state.logView = localStorage.getItem("logView") || "detail"; } catch (_) { state.logView = "detail"; }
+    }
+    return state.logView;
+  }
+  function setLogView(v) {
+    state.logView = v;
+    try { localStorage.setItem("logView", v); } catch (_) { /* nincs tároló */ }
+    renderLog();
+  }
+
+  // Egy fogás részletes kártyája
+  function cardHtml(c, opts) {
+    const size = [c.weight_kg != null ? `${numFmt(c.weight_kg)} kg` : "", c.length_cm != null ? `${numFmt(c.length_cm, 1)} cm` : ""]
+      .filter(Boolean).join(", ");
+    const tags = [
+      c._pending ? `<span class="tag pending">Feltöltésre vár</span>` : "",
+      c.released ? `<span class="tag">Visszaengedve</span>` : "",
+      c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : ""
+    ].join("");
+    const meta = [nameOf(c.user_id), dtFmt(c.caught_at)].join(" · ");
+    const where = [c.water, c.spot].filter(Boolean).join(" – ");
+    const how = [c.bait, c.method].filter(Boolean).join(" · ");
+    const own = c.user_id === state.uid;
+    const canEdit = own || (!c._pending && state.me && state.me.is_admin);
+    const map = c.lat != null ? `<a href="https://www.google.com/maps?q=${c.lat},${c.lon}" target="_blank" rel="noopener">Térkép</a>` : "";
+    const nPh = photoCount(c);
+    const mo = moonInfo(new Date(c.caught_at));
+    const inner = opts && opts.inner;
+    return `
+      <div class="${inner ? "catch catch-inner" : "card catch"}" data-id="${esc(c.client_id)}"${inner ? "" : ` id="fogas-${esc(c.client_id)}"`}>
+        <div class="catch-photo-wrap">
+          <div class="catch-photo" data-photo="${nPh ? "1" : ""}">${nPh ? "" : "🐟"}</div>
+          ${nPh > 1 ? `<span class="photo-count">📷 ${nPh}</span>` : ""}
+        </div>
+        <div>
+          <div class="catch-title">${esc(c.species)}${size ? " – " + esc(size) : ""}</div>
+          <div class="catch-meta">${esc(meta)}</div>
+          <div class="catch-meta">${esc(where)}</div>
+          ${how ? `<div class="catch-meta">${esc(how)}</div>` : ""}
+          ${c.note ? `<div class="catch-meta"><em>${esc(c.note)}</em></div>` : ""}
+          ${c.weather ? `<div class="catch-wx">🌤 ${esc(weatherLine(c.weather))}</div>` : ""}
+          <div class="catch-wx">${mo.icon} ${esc(mo.name)} · megvilágítottság kb. ${mo.illum_pct}%</div>
+          <div class="catch-wx">🎉 Névnap: ${esc(nameDayText(new Date(c.caught_at)))}</div>
+          <div style="margin-top:4px">${tags}</div>
+          <div class="catch-actions">
+            ${map}
+            <button type="button" class="link btn-share" data-id="${esc(c.client_id)}">Megosztás</button>
+            ${canEdit ? `<button type="button" class="link btn-edit" data-id="${esc(c.client_id)}">Szerkesztés</button>` : ""}
+            ${canEdit ? `<button type="button" class="link btn-del" data-id="${esc(c.client_id)}">Törlés</button>` : ""}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Egy fogás tömör sora (névnap itt nincs, csak a lenyíló részletekben)
+  function rowHtml(c) {
+    const nPh = photoCount(c);
+    const p = tzParts(new Date(c.caught_at));
+    return `
+      <div class="crow-wrap" id="fogas-${esc(c.client_id)}" data-id="${esc(c.client_id)}">
+        <button type="button" class="crow" data-row="${esc(c.client_id)}" aria-expanded="false">
+          <span class="crow-thumb">
+            <span class="catch-photo" data-photo="${nPh ? "1" : ""}">${nPh ? "" : "🐟"}</span>
+            ${nPh > 1 ? `<span class="crow-count">${nPh}</span>` : ""}
+          </span>
+          <span class="crow-main">
+            <span class="crow-species">${esc(c.species)}${c.released ? ` <span class="crow-tag">vissza</span>` : ""}${c._pending ? ` <span class="crow-tag pending">vár</span>` : ""}</span>
+            <span class="crow-sub">${esc(nameOf(c.user_id))} · ${esc(c.water)}</span>
+          </span>
+          <span class="crow-right">
+            <span class="crow-kg">${c.weight_kg != null ? esc(numFmt(c.weight_kg)) + " kg" : "–"}</span>
+            <span class="crow-date">${p.y !== tzParts(new Date()).y ? p.y + "." : ""}${p.m}.${p.d}. ${p.h}:${p.min}</span>
+          </span>
+        </button>
+        <div class="crow-detail hidden"></div>
+      </div>`;
+  }
+
+  // Listaképek betöltése egy adott tárolóban (egy kötegben)
+  function loadThumbs(container, list) {
+    (async () => {
+      const urls = await signedUrlsFor(list.filter((c) => !c._pending).map(coverPath));
+      list.forEach((c) => {
+        container.querySelectorAll(`[data-id="${CSS.escape(c.client_id)}"] .catch-photo[data-photo="1"]`).forEach((box) => {
+          if (box.tagName === "IMG") return;
+          let url = null;
+          if (c._pending) { const b = coverBlob(c); if (b) url = URL.createObjectURL(b); }
+          else url = urls[coverPath(c)];
+          if (!url) { box.textContent = "📷"; return; }
+          const img = document.createElement("img");
+          img.className = "catch-photo";
+          img.dataset.photo = "1";
+          img.alt = c.species;
+          img.loading = "lazy";
+          img.src = url;
+          if (!box.closest(".crow")) img.addEventListener("click", async () => openViewer(await photoUrlsOf(c), 0, captionOf(c)));
+          box.replaceWith(img);
+        });
+      });
+    })();
+  }
+
+  function toggleRow(id) {
+    const wrap = document.querySelector(`.crow-wrap[data-id="${CSS.escape(id)}"]`);
+    if (!wrap) return;
+    const det = wrap.querySelector(".crow-detail");
+    const btn = wrap.querySelector(".crow");
+    const open = det.classList.contains("hidden");
+    if (open) {
+      const c = allEntries().find((x) => x.client_id === id);
+      if (!c) return;
+      det.innerHTML = cardHtml(c, { inner: true });
+      loadThumbs(det, [c]);
+    }
+    det.classList.toggle("hidden", !open);
+    btn.setAttribute("aria-expanded", open ? "true" : "false");
+    wrap.classList.toggle("open", open);
   }
 
   function renderLog() {
@@ -1216,63 +1547,267 @@
     fillSelect($("#fWater"), uniqSorted(entries.map((c) => c.water)).map((v) => ({ value: v, label: v })), "Minden vízterület");
     fillSelect($("#fSpecies"), uniqSorted(entries.map((c) => c.species)).map((v) => ({ value: v, label: v })), "Minden halfaj");
 
+    const view = logView();
+    $$("#logViewSeg [data-view]").forEach((b) => {
+      const on = b.dataset.view === view;
+      b.classList.toggle("active", on);
+      b.setAttribute("aria-pressed", on ? "true" : "false");
+    });
+
     const list = filteredEntries();
     $("#logCount").textContent = `${list.length} fogás`;
     const out = $("#logList");
     if (!list.length) { out.innerHTML = `<div class="card empty">Nincs megjeleníthető fogás.</div>`; return; }
 
-    out.innerHTML = list.map((c) => {
-      const size = [c.weight_kg != null ? `${numFmt(c.weight_kg)} kg` : "", c.length_cm != null ? `${numFmt(c.length_cm, 1)} cm` : ""]
-        .filter(Boolean).join(", ");
-      const tags = [
-        c._pending ? `<span class="tag pending">Feltöltésre vár</span>` : "",
-        c.released ? `<span class="tag">Visszaengedve</span>` : "",
-        c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : ""
-      ].join("");
-      const meta = [nameOf(c.user_id), dtFmt(c.caught_at)].join(" · ");
-      const where = [c.water, c.spot].filter(Boolean).join(" – ");
-      const how = [c.bait, c.method].filter(Boolean).join(" · ");
-      const own = c.user_id === state.uid;
-      const canEdit = own || (!c._pending && state.me && state.me.is_admin);
-      const map = c.lat != null ? `<a href="https://www.google.com/maps?q=${c.lat},${c.lon}" target="_blank" rel="noopener">Térkép</a>` : "";
-      const hasPhoto = c._pending ? !!c.photo : !!c.photo_path;
-      return `
-        <div class="card catch" data-id="${esc(c.client_id)}">
-          <div class="catch-photo" data-photo="${hasPhoto ? "1" : ""}">${hasPhoto ? "" : "🐟"}</div>
-          <div>
-            <div class="catch-title">${esc(c.species)}${size ? " – " + esc(size) : ""}</div>
-            <div class="catch-meta">${esc(meta)}</div>
-            <div class="catch-meta">${esc(where)}</div>
-            ${how ? `<div class="catch-meta">${esc(how)}</div>` : ""}
-            ${c.note ? `<div class="catch-meta"><em>${esc(c.note)}</em></div>` : ""}
-            ${c.weather ? `<div class="catch-wx">🌤 ${esc(weatherLine(c.weather))}</div>` : ""}
-            ${(() => { const mo = moonInfo(new Date(c.caught_at)); return `<div class="catch-wx">${mo.icon} ${esc(mo.name)} · megvilágítottság kb. ${mo.illum_pct}%</div>`; })()}
-            <div style="margin-top:4px">${tags}</div>
-            <div class="catch-actions">
-              ${map}
-              ${canEdit ? `<button type="button" class="link btn-edit" data-id="${esc(c.client_id)}">Szerkesztés</button>` : ""}
-              ${canEdit ? `<button type="button" class="link btn-del" data-id="${esc(c.client_id)}">Törlés</button>` : ""}
-            </div>
-          </div>
-        </div>`;
-    }).join("");
+    // A nyitott tömör sorok újrarajzolás után is nyitva maradnak
+    const openIds = $$(".crow-wrap.open").map((el) => el.dataset.id);
+    if (view === "compact") {
+      out.innerHTML = `<div class="card crow-list">${list.map(rowHtml).join("")}</div>`;
+      const hl = state.highlight && Date.now() < state.highlight.until ? state.highlight.id : null;
+      openIds.concat(hl ? [hl] : []).forEach((id) => {
+        const w = document.querySelector(`.crow-wrap[data-id="${CSS.escape(id)}"]`);
+        if (w && !w.classList.contains("open")) toggleRow(id);
+      });
+    } else {
+      out.innerHTML = list.map((c) => cardHtml(c)).join("");
+    }
+    applyHighlight();
+    loadThumbs(out, list);
+  }
 
-    // Fotók betöltése
-    list.forEach(async (c) => {
-      const box = out.querySelector(`.catch[data-id="${CSS.escape(c.client_id)}"] .catch-photo`);
-      if (!box || !box.dataset.photo) return;
-      let url = null;
-      if (c._pending && c.photo) url = URL.createObjectURL(c.photo);
-      else if (c.photo_path) url = await signedUrl(c.photo_path);
-      if (!url) { box.textContent = "📷"; return; }
-      const img = document.createElement("img");
-      img.className = "catch-photo";
-      img.alt = c.species;
-      img.loading = "lazy";
-      img.src = url;
-      img.addEventListener("click", () => { $("#photoModalImg").src = url; $("#photoModal").classList.remove("hidden"); });
-      box.replaceWith(img);
-    });
+  // ------------------------------------------------------------------
+  // Galéria: fotó + halfaj, horgász, súly, vízterület
+  // ------------------------------------------------------------------
+  function renderGallery() {
+    const withPhoto = allEntries().filter((c) => photoCount(c) > 0);
+    const uniqSorted = (arr) => Array.from(new Set(arr.filter(Boolean))).sort((a, b) => a.localeCompare(b, "hu"));
+    fillSelect($("#gYear"), yearOptions(withPhoto), "Év");
+    fillSelect($("#gUser"), Array.from(new Set(withPhoto.map((c) => c.user_id))).map((id) => ({ value: id, label: nameOf(id) }))
+      .sort((a, b) => a.label.localeCompare(b.label, "hu")), "Horgász");
+    fillSelect($("#gSpecies"), uniqSorted(withPhoto.map((c) => c.species)).map((v) => ({ value: v, label: v })), "Halfaj");
+    const y = $("#gYear").value, u = $("#gUser").value, sp = $("#gSpecies").value;
+    const list = withPhoto.filter((c) => (!y || yearOf(c.caught_at) === y) && (!u || c.user_id === u) && (!sp || c.species === sp));
+    const grid = $("#galleryGrid");
+    if (!list.length) {
+      grid.innerHTML = `<div class="card empty" style="grid-column:1/-1">Még nincs fotós fogás${y || u || sp ? " ezekkel a szűrőkkel" : ""}.</div>`;
+      return;
+    }
+    grid.innerHTML = list.map((c) => `
+      <button type="button" class="g-tile" data-id="${esc(c.client_id)}" aria-label="${esc(captionOf(c))}">
+        <img alt="" loading="lazy">
+        ${photoCount(c) > 1 ? `<span class="photo-count" style="top:6px;bottom:auto">📷 ${photoCount(c)}</span>` : ""}
+        <div class="g-info">
+          <div class="g-species">${esc(c.species)}</div>
+          ${c.weight_kg != null ? `<div class="g-weight">${esc(numFmt(c.weight_kg))} kg</div>` : ""}
+          <div class="g-meta">${esc(nameOf(c.user_id))}</div>
+          <div class="g-meta">${esc(c.water)}</div>
+        </div>
+      </button>`).join("");
+    (async () => {
+      const urls = await signedUrlsFor(list.filter((c) => !c._pending).map(coverPath));
+      list.forEach((c) => {
+        const img = grid.querySelector(`.g-tile[data-id="${CSS.escape(c.client_id)}"] img`);
+        if (!img) return;
+        if (c._pending) { const b = coverBlob(c); if (b) img.src = URL.createObjectURL(b); }
+        else if (urls[coverPath(c)]) img.src = urls[coverPath(c)];
+      });
+    })();
+  }
+
+  async function openGalleryTile(id) {
+    const c = allEntries().find((x) => x.client_id === id);
+    if (c) openViewer(await photoUrlsOf(c), 0, captionOf(c));
+  }
+
+  // ------------------------------------------------------------------
+  // Megosztás (Viber, WhatsApp stb. a telefon megosztás menüjén át)
+  // ------------------------------------------------------------------
+  const APP_URL = (() => { try { return new URL("./", location.href).href; } catch (_) { return location.href; } })();
+  const share = { file: null, text: "" };
+
+  function shareTextOf(c) {
+    const size = [c.weight_kg != null ? `${numFmt(c.weight_kg)} kg` : "", c.length_cm != null ? `${numFmt(c.length_cm, 1)} cm` : ""].filter(Boolean).join(", ");
+    const mo = moonInfo(new Date(c.caught_at));
+    const lines = [
+      `🎣 ${nameOf(c.user_id)}: ${c.species}${size ? " – " + size : ""}`,
+      `📍 ${[c.water, c.spot].filter(Boolean).join(" – ")}`,
+      `🕒 ${dtFmt(c.caught_at)}`
+    ];
+    if (c.bait || c.method) lines.push(`🪱 ${[c.bait, c.method].filter(Boolean).join(" · ")}`);
+    if (c.weather) lines.push(`🌤 ${weatherLine(c.weather)}`);
+    lines.push(`${mo.icon} ${mo.name}`);
+    if (c.released) lines.push("↩️ Visszaengedve");
+    if (c.note) lines.push(`💬 ${c.note}`);
+    lines.push("", `${CFG.CLUB_NAME || "Horgásznapló"}: ${APP_URL}`);
+    return lines.join("\n");
+  }
+
+  async function openShare(c, afterSave) {
+    share.file = null;
+    share.text = shareTextOf(c);
+    $("#shareTitle").textContent = afterSave ? "Elküldöd a csoportnak is?" : "Fogás megosztása";
+    $("#shareText").textContent = share.text;
+    $("#shareMsg").textContent = "";
+    const img = $("#shareImg");
+    img.classList.add("hidden");
+    $("#btnShareGo").disabled = false;
+    $("#shareSheet").classList.remove("hidden");
+    // A listakép előkészítése, hogy a megosztás gomb azonnal tudjon küldeni
+    try {
+      let blob = null;
+      if (c._pending) blob = coverBlob(c);
+      else if (coverPath(c)) {
+        $("#btnShareGo").disabled = true;
+        $("#shareMsg").textContent = "Fotó előkészítése…";
+        const url = await signedUrl(coverPath(c));
+        if (url) blob = await (await fetch(url)).blob();
+        $("#shareMsg").textContent = "";
+      }
+      if (blob) {
+        share.file = new File([blob], `fogas-${(c.species || "hal").toLowerCase()}.jpg`, { type: blob.type || "image/jpeg" });
+        img.src = URL.createObjectURL(blob);
+        img.classList.remove("hidden");
+      }
+    } catch (e) {
+      $("#shareMsg").textContent = "A fotót nem sikerült előkészíteni, csak a szöveg kerül megosztásra.";
+    } finally {
+      $("#btnShareGo").disabled = false;
+    }
+  }
+
+  async function doShare() {
+    const msg = $("#shareMsg");
+    try {
+      if (navigator.share) {
+        const withFile = share.file && navigator.canShare && navigator.canShare({ files: [share.file] });
+        await navigator.share(withFile ? { files: [share.file], text: share.text } : { text: share.text });
+        closeShare();
+        return;
+      }
+      await navigator.clipboard.writeText(share.text);
+      msg.className = "msg ok";
+      msg.textContent = "Ezen a készüléken nincs megosztás menü: a szöveget kimásoltam, beillesztheted a csoportba.";
+    } catch (e) {
+      if (e && e.name === "AbortError") return; // a felhasználó bezárta a menüt
+      msg.className = "msg err";
+      msg.textContent = "A megosztás nem sikerült: " + errText(e);
+    }
+  }
+  function closeShare() { $("#shareSheet").classList.add("hidden"); }
+
+  // ------------------------------------------------------------------
+  // Push-értesítések
+  // ------------------------------------------------------------------
+  const PUSH_OK = "serviceWorker" in navigator && "PushManager" in window && "Notification" in window;
+
+  function b64uToU8(b64u) {
+    const s = b64u.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((b64u.length + 3) % 4);
+    const bin = atob(s);
+    return Uint8Array.from(bin, (ch) => ch.charCodeAt(0));
+  }
+
+  async function callFn(body) {
+    const { data, error } = await state.sb.functions.invoke("ertesites", { body });
+    if (error) {
+      let detail = "";
+      try { const j = await error.context.json(); detail = j && j.error; } catch (_) { /* nincs részlet */ }
+      const status = error.context && error.context.status;
+      if (status === 404) throw new Error("Az értesítési szolgáltatás még nincs telepítve a Supabase-ben (útmutató 12. fejezet).");
+      throw new Error(detail || error.message || "Az értesítési szolgáltatás nem érhető el.");
+    }
+    return data;
+  }
+
+  async function swReady() {
+    return Promise.race([
+      navigator.serviceWorker.ready,
+      new Promise((_, rej) => setTimeout(() => rej(new Error("Az app háttérszolgáltatása nem indult el. Frissítsd az oldalt.")), 8000))
+    ]);
+  }
+
+  async function currentPushSub() {
+    if (!PUSH_OK) return null;
+    const reg = await navigator.serviceWorker.getRegistration();
+    return reg ? reg.pushManager.getSubscription() : null;
+  }
+
+  async function updatePushMenu() {
+    const sub = await currentPushSub().catch(() => null);
+    $("#menuPush").textContent = sub ? "🔕 Értesítések kikapcsolása" : "🔔 Értesítések bekapcsolása";
+    $("#menuPushTest").classList.toggle("hidden", !sub);
+    $("#menuPush").classList.toggle("hidden", !PUSH_OK && !IS_IOS);
+    return !!sub;
+  }
+
+  async function updatePushHint() {
+    let dismissed = false;
+    try { dismissed = localStorage.getItem("pushHintHidden") === "1"; } catch (_) { /* nincs tároló */ }
+    const on = await updatePushMenu();
+    $("#pushHint").classList.toggle("hidden", on || dismissed || (!PUSH_OK && !IS_IOS) || (typeof Notification !== "undefined" && Notification.permission === "denied"));
+  }
+
+  async function enablePush() {
+    try {
+      if (IS_IOS && !IS_STANDALONE) throw new Error("iPhone-on az értesítéshez előbb tedd ki az appot a kezdőképernyőre (Megosztás → Főképernyőhöz adás), és onnan indítsd.");
+      if (!PUSH_OK) throw new Error("Ez a böngésző nem támogatja az értesítéseket.");
+      if (!navigator.onLine) throw new Error("A bekapcsoláshoz internetkapcsolat kell.");
+      const perm = await Notification.requestPermission();
+      if (perm !== "granted") throw new Error("Az értesítések nincsenek engedélyezve. A telefon beállításaiban engedélyezheted ennek az appnak.");
+      const { publicKey } = await callFn({ action: "key" });
+      const reg = await swReady();
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: b64uToU8(publicKey) });
+      await callFn({ action: "subscribe", subscription: sub.toJSON() });
+      toast("Értesítések bekapcsolva ezen a készüléken.");
+    } catch (e) {
+      toast(errText(e), 6000);
+    }
+    updatePushHint();
+  }
+
+  async function disablePush() {
+    try {
+      const sub = await currentPushSub();
+      if (sub) {
+        await callFn({ action: "unsubscribe", endpoint: sub.endpoint }).catch(() => {});
+        await sub.unsubscribe();
+      }
+      toast("Értesítések kikapcsolva ezen a készüléken.");
+    } catch (e) { toast(errText(e)); }
+    updatePushHint();
+  }
+
+  async function testPush() {
+    try {
+      const r = await callFn({ action: "test", url: APP_URL });
+      toast(r && r.ok ? "Próba-értesítés elküldve. Pár másodpercen belül meg kell érkeznie." : "A próba-értesítés nem ment ki.", 5000);
+    } catch (e) { toast(errText(e), 6000); }
+  }
+
+  // Új fogásról értesítés a többieknek (a szerver csak egyszer küldi ki)
+  function notifyNewCatch(clientId) {
+    if (!state.sb) return;
+    callFn({ action: "new_catch", client_id: clientId, url: APP_URL }).catch((e) => console.warn("Értesítés:", e));
+  }
+
+  // Értesítésre koppintva: a fogás megnyitása a naplóban
+  function openCatchFromHash() {
+    const m = location.hash.match(/^#fogas-([0-9a-f-]{8,})$/i);
+    if (!m) return;
+    history.replaceState(null, "", location.pathname + location.search);
+    state.highlight = { id: m[1], until: Date.now() + 5000, scrolled: false };
+    showTab("tabLog");
+    setTimeout(() => { state.highlight = null; $$(".catch.highlight").forEach((el) => el.classList.remove("highlight")); }, 5000);
+  }
+
+  // A naplóban kiemelt fogás (értesítésből megnyitva) – újrarajzolás után is megmarad
+  function applyHighlight() {
+    const h = state.highlight;
+    if (!h || Date.now() > h.until) return;
+    const el = document.getElementById("fogas-" + h.id);
+    if (!el) return;
+    el.classList.add("highlight");
+    if (!h.scrolled) { h.scrolled = true; setTimeout(() => el.scrollIntoView({ behavior: "smooth", block: "center" }), 100); }
   }
 
   async function deleteEntry(clientId) {
@@ -1288,7 +1823,7 @@
         const { data: del, error } = await state.sb.from("catches").delete().eq("client_id", clientId).select("client_id");
         if (error) throw error;
         if (!del || !del.length) throw new Error("Nincs jogosultságod ennek a fogásnak a törléséhez.");
-        if (c && c.photo_path) await state.sb.storage.from("photos").remove([c.photo_path]).catch(() => {});
+        if (c) { const ps = catchPhotoPaths(c); if (ps.length) await state.sb.storage.from("photos").remove(ps).catch(() => {}); }
         state.catches = state.catches.filter((x) => x.client_id !== clientId);
         await idb.put("kv", state.catches, "catches");
       }
@@ -1307,7 +1842,7 @@
     const n = (v, d = 2) => (v == null ? "" : numFmt(v, d).replace(/\s/g, ""));
     const head = ["Időpont", "Horgász", "Halfaj", "Súly (kg)", "Hossz (cm)", "Vízterület", "Helyszín", "Csali",
       "Módszer", "Visszaengedve", "Megjegyzés", "Szélesség", "Hosszúság", "Hőmérséklet (°C)", "Légnyomás (hPa)",
-      "Nyomásváltozás 3 óra (hPa)", "Szél (km/h)", "Szélirány", "Felhőzet (%)", "Csapadék (mm)", "Időjárás", "Holdfázis", "Hold megvilágítottság (%)", "Állapot"];
+      "Nyomásváltozás 3 óra (hPa)", "Szél (km/h)", "Szélirány", "Felhőzet (%)", "Csapadék (mm)", "Időjárás", "Holdfázis", "Hold megvilágítottság (%)", "Névnap", "Fotók száma", "Állapot"];
     const rows = list.map((c) => {
       const w = c.weather || {};
       const mo = moonInfo(new Date(c.caught_at));
@@ -1315,7 +1850,7 @@
         c.bait, c.method, c.released ? "igen" : "nem", c.note,
         c.lat != null ? String(c.lat).replace(".", ",") : "", c.lon != null ? String(c.lon).replace(".", ",") : "",
         n(w.temp_c, 1), n(w.pressure_hpa, 1), n(w.pressure_trend_3h, 1), n(w.wind_kmh, 1), windDir(w.wind_dir_deg),
-        n(w.cloud_pct, 0), n(w.precip_mm, 1), w.desc || "", mo.name, mo.illum_pct, c._pending ? "feltöltésre vár" : "feltöltve"];
+        n(w.cloud_pct, 0), n(w.precip_mm, 1), w.desc || "", mo.name, mo.illum_pct, nameDayText(new Date(c.caught_at)), photoCount(c), c._pending ? "feltöltésre vár" : "feltöltve"];
     });
     const cell = (v) => {
       const s = String(v ?? "");
@@ -1478,9 +2013,26 @@
     $("#catchForm").addEventListener("submit", onSave);
     $("#photoCamera").addEventListener("change", onPhotoPicked);
     $("#photoGallery").addEventListener("change", onPhotoPicked);
-    $("#btnPhotoRemove").addEventListener("click", () => {
-      if (state.photo && state.photo.existing) state.photoRemoved = true;
-      clearPhoto();
+    $("#photoGrid").addEventListener("click", onPhotoGridClick);
+    ["#gYear", "#gUser", "#gSpecies"].forEach((sel) => $(sel).addEventListener("change", renderGallery));
+    $("#galleryGrid").addEventListener("click", (e) => { const t = e.target.closest(".g-tile"); if (t) openGalleryTile(t.dataset.id); });
+    $("#viewerPrev").addEventListener("click", (e) => { e.stopPropagation(); stepViewer(-1); });
+    $("#viewerNext").addEventListener("click", (e) => { e.stopPropagation(); stepViewer(1); });
+    $("#viewerClose").addEventListener("click", (e) => { e.stopPropagation(); $("#photoModal").classList.add("hidden"); });
+    let touchX = null;
+    $("#photoModal").addEventListener("touchstart", (e) => { touchX = e.touches[0].clientX; }, { passive: true });
+    $("#photoModal").addEventListener("touchend", (e) => {
+      if (touchX == null) return;
+      const dx = e.changedTouches[0].clientX - touchX; touchX = null;
+      if (Math.abs(dx) > 50) stepViewer(dx < 0 ? 1 : -1);
+    });
+    $("#btnShareGo").addEventListener("click", doShare);
+    $("#btnShareClose").addEventListener("click", closeShare);
+    $("#shareSheet").addEventListener("click", (e) => { if (e.target.id === "shareSheet") closeShare(); });
+    $("#btnPushHintOn").addEventListener("click", enablePush);
+    $("#btnPushHintLater").addEventListener("click", () => {
+      try { localStorage.setItem("pushHintHidden", "1"); } catch (_) { /* nincs tároló */ }
+      $("#pushHint").classList.add("hidden");
     });
     $("#btnGps").addEventListener("click", () => requestGps(false));
     $("#btnMap").addEventListener("click", openMap);
@@ -1513,16 +2065,28 @@
         if (a === "logout") logout();
         if (a === "rename") rename();
         if (a === "members") showMembers();
+        if (a === "push") { $("#menuPanel").classList.add("hidden"); currentPushSub().then((s) => (s ? disablePush() : enablePush())); }
+        if (a === "pushtest") { $("#menuPanel").classList.add("hidden"); testPush(); }
       }
       const del = e.target.closest(".btn-del");
       if (del) deleteEntry(del.dataset.id);
       const ed = e.target.closest(".btn-edit");
       if (ed) startEdit(ed.dataset.id);
+      const rowBtn = e.target.closest(".crow[data-row]");
+      if (rowBtn) toggleRow(rowBtn.dataset.row);
+      const lv = e.target.closest("#logViewSeg [data-view]");
+      if (lv) setLogView(lv.dataset.view);
+      const sh = e.target.closest(".btn-share");
+      if (sh) { const c = allEntries().find((x) => x.client_id === sh.dataset.id); if (c) openShare(c, false); }
       const mem = e.target.closest("[data-member]");
       if (mem) setApproval(mem.dataset.member, mem.dataset.ok === "1");
     });
-    $("#photoModal").addEventListener("click", () => $("#photoModal").classList.add("hidden"));
+    $("#photoModal").addEventListener("click", (e) => { if (e.target.id === "photoModal") $("#photoModal").classList.add("hidden"); });
 
+    // Értesítésre koppintva, ha az app már nyitva van: csak a címsor # része változik
+    window.addEventListener("hashchange", () => {
+      if (state.me && state.me.approved && !$("#viewMain").classList.contains("hidden")) { refreshData(); openCatchFromHash(); }
+    });
     window.addEventListener("online", () => { updateNet(); syncOutbox(); refreshData(); });
     window.addEventListener("offline", updateNet);
     document.addEventListener("visibilitychange", () => {

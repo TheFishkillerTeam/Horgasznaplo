@@ -30,6 +30,8 @@
 
   <div id="menuPanel" class="menu hidden">
     <div id="menuUser" class="menu-user"></div>
+    <button type="button" data-action="push" id="menuPush">🔔 Értesítések bekapcsolása</button>
+    <button type="button" data-action="pushtest" id="menuPushTest" class="hidden">Próba-értesítés küldése</button>
     <button type="button" data-action="rename">Megjelenített név módosítása</button>
     <button type="button" data-action="members" id="menuMembers" class="hidden">Tagok jóváhagyása</button>
     <button type="button" data-action="logout">Kijelentkezés</button>
@@ -115,19 +117,16 @@
           </div>
           <p id="editInfo" class="hint hidden"></p>
 
-          <div class="photo-box" id="photoBox">
-            <img id="photoPreview" alt="" class="hidden">
-            <div id="photoEmpty" class="photo-empty">Nincs fotó</div>
-          </div>
+          <div id="photoGrid" class="photo-grid" aria-live="polite"></div>
           <div class="photo-actions">
-            <label class="btn small">📷 Fotó készítése
+            <label class="btn small" id="lblCamera">📷 Fotó készítése
               <input id="photoCamera" type="file" accept="image/*" capture="environment" class="visually-hidden">
             </label>
-            <label class="btn small">🖼 Galériából
-              <input id="photoGallery" type="file" accept="image/*" class="visually-hidden">
+            <label class="btn small" id="lblGallery">🖼 Galériából
+              <input id="photoGallery" type="file" accept="image/*" multiple class="visually-hidden">
             </label>
-            <button type="button" id="btnPhotoRemove" class="btn small hidden">Törlés</button>
           </div>
+          <p class="hint">Legfeljebb 6 fotó. A ★ jelölésű kép látszik a listában és a galériában; koppints a csillagra egy másik képen a cseréhez.</p>
           <p id="photoMsg" class="msg" role="status"></p>
 
           <label class="field">Halfaj *
@@ -220,6 +219,14 @@
 
       <!-- NAPLÓ -->
       <div id="tabLog" class="tab hidden">
+        <div id="pushHint" class="card push-hint hidden">
+          <strong>🔔 Kérsz értesítést a többiek fogásairól?</strong>
+          <p class="hint">Ha valaki új fogást rögzít, a telefonod jelez – akkor is, ha az app be van zárva.</p>
+          <div class="row-btns">
+            <button type="button" class="btn small primary" id="btnPushHintOn">Bekapcsolom</button>
+            <button type="button" class="btn small" id="btnPushHintLater">Most nem</button>
+          </div>
+        </div>
         <div class="filters card">
           <div class="row2">
             <select id="fYear" aria-label="Év"></select>
@@ -231,10 +238,26 @@
           </div>
           <div class="filters-foot">
             <span id="logCount" class="hint"></span>
-            <button type="button" class="btn small" id="btnExport">Excel-export (CSV)</button>
+            <div class="seg2" id="logViewSeg" role="group" aria-label="Napló nézet">
+              <button type="button" data-view="detail">Részletes</button>
+              <button type="button" data-view="compact">Tömör</button>
+            </div>
           </div>
+          <button type="button" class="btn small block-sm" id="btnExport">Excel-export (CSV)</button>
         </div>
         <div id="logList"></div>
+      </div>
+
+      <!-- GALÉRIA -->
+      <div id="tabGallery" class="tab hidden">
+        <div class="card filters">
+          <div class="row3">
+            <select id="gYear" aria-label="Év"></select>
+            <select id="gUser" aria-label="Horgász"></select>
+            <select id="gSpecies" aria-label="Halfaj"></select>
+          </div>
+        </div>
+        <div id="galleryGrid" class="gallery-grid"></div>
       </div>
 
       <!-- ÖSSZESÍTŐK -->
@@ -269,6 +292,7 @@
   <nav id="bottomNav" class="bottomnav hidden">
     <button type="button" data-tab="tabNew" class="active"><span>＋</span>Új fogás</button>
     <button type="button" data-tab="tabLog"><span>☰</span>Napló</button>
+    <button type="button" data-tab="tabGallery"><span>▦</span>Galéria</button>
     <button type="button" data-tab="tabStats"><span>▤</span>Összesítők</button>
   </nav>
 
@@ -289,8 +313,28 @@
     </div>
   </div>
 
-  <div id="photoModal" class="modal hidden">
+  <div id="photoModal" class="modal viewer hidden" role="dialog" aria-label="Fotók">
+    <button type="button" class="viewer-close" id="viewerClose" aria-label="Bezárás">✕</button>
+    <button type="button" class="viewer-nav prev" id="viewerPrev" aria-label="Előző">‹</button>
     <img id="photoModalImg" alt="Fogás fotója">
+    <button type="button" class="viewer-nav next" id="viewerNext" aria-label="Következő">›</button>
+    <div class="viewer-caption" id="viewerCaption"></div>
+  </div>
+
+  <div id="shareSheet" class="sheet-wrap hidden" role="dialog" aria-label="Megosztás">
+    <div class="sheet">
+      <h3 id="shareTitle">Megosztás</h3>
+      <div class="share-preview">
+        <img id="shareImg" alt="" class="hidden">
+        <pre id="shareText"></pre>
+      </div>
+      <p id="shareMsg" class="msg" role="status"></p>
+      <div class="row-btns">
+        <button type="button" class="btn primary" id="btnShareGo">Megosztás…</button>
+        <button type="button" class="btn" id="btnShareClose">Most nem</button>
+      </div>
+      <p class="hint">A telefon megosztás menüjében válaszd ki a Viber- vagy WhatsApp-csoportot.</p>
+    </div>
   </div>
 
   <script src="config.js"></script>
