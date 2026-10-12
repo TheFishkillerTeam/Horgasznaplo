@@ -1,0 +1,243 @@
+<!doctype html>
+<html lang="hu">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#0e2a33">
+  <title>TFT Horgásznapló</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="icons/apple-touch-icon-180.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="TFT Napló">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <img src="icons/icon-192.png" alt="" width="32" height="32">
+      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small></span>
+    </div>
+    <div class="topbar-right">
+      <span id="netBadge" class="badge" title="Kapcsolat állapota">—</span>
+      <button id="btnSync" class="badge badge-btn hidden" type="button" title="Szinkronizálás most"></button>
+      <button id="btnMenu" class="icon-btn hidden" type="button" aria-label="Menü">☰</button>
+    </div>
+  </header>
+
+  <div id="menuPanel" class="menu hidden">
+    <div id="menuUser" class="menu-user"></div>
+    <button type="button" data-action="rename">Megjelenített név módosítása</button>
+    <button type="button" data-action="members" id="menuMembers" class="hidden">Tagok jóváhagyása</button>
+    <button type="button" data-action="logout">Kijelentkezés</button>
+  </div>
+
+  <main id="app">
+    <!-- iPhone: telepítési figyelmeztetés (csak Safariban, telepítés előtt) -->
+    <div id="iosInstall" class="card ios-install hidden">
+      <strong>Telepítsd az appot a kezdőképernyőre!</strong>
+      <p>Safariban koppints a <b>Megosztás</b> gombra (négyzet felfelé mutató nyíllal), majd válaszd a <b>Főképernyőhöz adás</b> pontot. Utána mindig az ikonról indítsd.</p>
+      <p class="hint">Böngészőből használva az iPhone egy hét használat nélkül törölheti a még fel nem töltött fogásokat.</p>
+      <button type="button" class="link" id="btnIosHide">Rendben, elrejtem</button>
+    </div>
+
+    <!-- Beállítás hiányzik -->
+    <section id="viewConfig" class="view hidden">
+      <div class="card">
+        <h2>Az app még nincs beállítva</h2>
+        <p>A <code>config.js</code> fájlba be kell írni a Supabase projekt URL-jét és kulcsát. Lásd az üzembe helyezési útmutató 4. pontját.</p>
+      </div>
+    </section>
+
+    <!-- Bejelentkezés / regisztráció -->
+    <section id="viewAuth" class="view hidden">
+      <div class="card narrow">
+        <div class="seg" role="tablist">
+          <button type="button" class="seg-btn active" data-auth="login">Belépés</button>
+          <button type="button" class="seg-btn" data-auth="register">Regisztráció</button>
+        </div>
+        <form id="authForm" autocomplete="on">
+          <label class="field reg-only hidden">Név (ahogy a listákban megjelenjen)
+            <input name="display_name" type="text" maxlength="40" autocomplete="nickname">
+          </label>
+          <label class="field">E-mail-cím
+            <input name="email" type="email" required autocomplete="email">
+          </label>
+          <label class="field">Jelszó
+            <input name="password" type="password" required minlength="8" autocomplete="current-password">
+          </label>
+          <p class="hint reg-only hidden">Legalább 8 karakter. Regisztráció után az adminisztrátor hagyja jóvá a tagságot.</p>
+          <button class="btn primary block" type="submit" id="authSubmit">Belépés</button>
+          <p id="authMsg" class="msg" role="status"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- Jóváhagyásra vár -->
+    <section id="viewPending" class="view hidden">
+      <div class="card narrow">
+        <h2>Jóváhagyásra vár</h2>
+        <p>A regisztráció sikeres. Amint az adminisztrátor jóváhagyja a tagságodat, használhatod az appot.</p>
+        <button class="btn primary block" type="button" id="btnRecheck">Újraellenőrzés</button>
+        <button class="btn block" type="button" data-action="logout">Kijelentkezés</button>
+      </div>
+    </section>
+
+    <!-- Fő nézetek -->
+    <section id="viewMain" class="view hidden">
+      <!-- ÚJ FOGÁS -->
+      <div id="tabNew" class="tab">
+        <form id="catchForm" class="card" novalidate>
+          <h2>Új fogás</h2>
+
+          <div class="photo-box" id="photoBox">
+            <img id="photoPreview" alt="" class="hidden">
+            <div id="photoEmpty" class="photo-empty">Nincs fotó</div>
+          </div>
+          <div class="photo-actions">
+            <label class="btn small">📷 Fotó készítése
+              <input id="photoCamera" type="file" accept="image/*" capture="environment" class="visually-hidden">
+            </label>
+            <label class="btn small">🖼 Galériából
+              <input id="photoGallery" type="file" accept="image/*" class="visually-hidden">
+            </label>
+            <button type="button" id="btnPhotoRemove" class="btn small hidden">Törlés</button>
+          </div>
+          <p id="photoMsg" class="msg" role="status"></p>
+
+          <label class="field">Halfaj *
+            <input name="species" list="speciesList" required maxlength="40" placeholder="pl. ponty">
+          </label>
+          <datalist id="speciesList"></datalist>
+
+          <div class="row2">
+            <label class="field">Súly (kg)
+              <input name="weight_kg" type="number" inputmode="decimal" step="0.01" min="0" max="500">
+            </label>
+            <label class="field">Hossz (cm)
+              <input name="length_cm" type="number" inputmode="decimal" step="0.5" min="0" max="500">
+            </label>
+          </div>
+
+          <label class="field">Időpont *
+            <input name="caught_at" type="datetime-local" required>
+          </label>
+
+          <label class="field">Vízterület *
+            <input name="water" list="waterList" required maxlength="80" placeholder="pl. Zagyva, jászberényi szakasz">
+          </label>
+          <datalist id="waterList"></datalist>
+
+          <label class="field">Helyszín / állás
+            <input name="spot" maxlength="80" placeholder="pl. 12-es stég">
+          </label>
+
+          <div class="row2">
+            <label class="field">Csali
+              <input name="bait" list="baitList" maxlength="60">
+            </label>
+            <label class="field">Módszer
+              <select name="method">
+                <option value="">—</option>
+                <option>Fenekezés</option>
+                <option>Feeder</option>
+                <option>Method feeder</option>
+                <option>Bojlis</option>
+                <option>Úszós</option>
+                <option>Pergetés</option>
+                <option>Műlegyezés</option>
+                <option>Egyéb</option>
+              </select>
+            </label>
+          </div>
+          <datalist id="baitList"></datalist>
+
+          <label class="check">
+            <input name="released" type="checkbox"> Visszaengedve
+          </label>
+
+          <label class="field">Megjegyzés
+            <textarea name="note" rows="2" maxlength="500"></textarea>
+          </label>
+
+          <div class="gps">
+            <div>
+              <strong>Helymeghatározás</strong>
+              <div id="gpsStatus" class="hint">Még nincs pozíció.</div>
+            </div>
+            <button type="button" class="btn small" id="btnGps">Pozíció</button>
+          </div>
+          <p class="hint">Az időjárási adatokat (hőmérséklet, légnyomás, szélirány és -sebesség) az app a fogás helye és időpontja alapján automatikusan rögzíti, amint van internetkapcsolat. A holdfázist az időpontból számolja, ehhez nem kell internet. Időjárási adatok: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0).</p>
+
+          <button class="btn primary block" type="submit" id="btnSave">Mentés</button>
+          <p id="saveMsg" class="msg" role="status"></p>
+        </form>
+      </div>
+
+      <!-- NAPLÓ -->
+      <div id="tabLog" class="tab hidden">
+        <div class="filters card">
+          <div class="row2">
+            <select id="fYear" aria-label="Év"></select>
+            <select id="fUser" aria-label="Horgász"></select>
+          </div>
+          <div class="row2">
+            <select id="fWater" aria-label="Vízterület"></select>
+            <select id="fSpecies" aria-label="Halfaj"></select>
+          </div>
+          <div class="filters-foot">
+            <span id="logCount" class="hint"></span>
+            <button type="button" class="btn small" id="btnExport">Excel-export (CSV)</button>
+          </div>
+        </div>
+        <div id="logList"></div>
+      </div>
+
+      <!-- ÖSSZESÍTŐK -->
+      <div id="tabStats" class="tab hidden">
+        <div class="card">
+          <div class="row2">
+            <select id="sYear" aria-label="Év"></select>
+            <select id="sMode" aria-label="Összesítés">
+              <option value="user">Horgászonként</option>
+              <option value="water">Vízterületenként</option>
+              <option value="species">Halfajonként</option>
+              <option value="records">Rekordok (legnagyobb hal fajonként)</option>
+              <option value="month">Havonta</option>
+              <option value="moon">Holdfázisonként</option>
+            </select>
+          </div>
+        </div>
+        <div id="statsOut"></div>
+      </div>
+    </section>
+
+    <!-- Tagok jóváhagyása (admin) -->
+    <section id="viewMembers" class="view hidden">
+      <div class="card">
+        <h2>Tagok</h2>
+        <div id="memberList"></div>
+        <button class="btn block" type="button" id="btnMembersBack">Vissza</button>
+      </div>
+    </section>
+  </main>
+
+  <nav id="bottomNav" class="bottomnav hidden">
+    <button type="button" data-tab="tabNew" class="active"><span>＋</span>Új fogás</button>
+    <button type="button" data-tab="tabLog"><span>☰</span>Napló</button>
+    <button type="button" data-tab="tabStats"><span>▤</span>Összesítők</button>
+  </nav>
+
+  <div id="toast" class="toast hidden" role="status"></div>
+
+  <div id="photoModal" class="modal hidden">
+    <img id="photoModalImg" alt="Fogás fotója">
+  </div>
+
+  <script src="config.js"></script>
+  <script src="supabase.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
