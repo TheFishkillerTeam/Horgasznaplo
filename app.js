@@ -70,6 +70,64 @@
     return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
   }
 
+  // ---- A fogás időpontja: két kézzel írható mező (dátum + idő) + rejtett ISO-mező ----
+  const pad2 = (n) => String(n).padStart(2, "0");
+  function setCatchTime(d) {
+    $("#catchDate").value = `${d.getFullYear()}.${pad2(d.getMonth() + 1)}.${pad2(d.getDate())}`;
+    $("#catchTime").value = `${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    syncCatchTime(true);
+  }
+  // A beírt szövegből Date (a telefon helyi ideje szerint), vagy null + hibaüzenet
+  function parseCatchTime() {
+    const ds = $("#catchDate").value.trim(), ts = $("#catchTime").value.trim();
+    const dm = ds.match(/^(\d{4})[.\-\/ ]?(\d{1,2})[.\-\/ ]?(\d{1,2})\.?$/);
+    const tm = ts.match(/^(\d{1,2})[:.]?(\d{2})$/);
+    if (!dm) return { error: "A dátumot így add meg: ÉÉÉÉ.HH.NN (pl. 2026.10.12)." , field: "date" };
+    if (!tm) return { error: "Az időt így add meg: ÓÓ:PP (pl. 06:40).", field: "time" };
+    const y = +dm[1], mo = +dm[2], da = +dm[3], h = +tm[1], mi = +tm[2];
+    const d = new Date(y, mo - 1, da, h, mi);
+    if (d.getFullYear() !== y || d.getMonth() !== mo - 1 || d.getDate() !== da || h > 23 || mi > 59)
+      return { error: "Nem létező dátum vagy idő.", field: h > 23 || mi > 59 ? "time" : "date" };
+    return { date: d };
+  }
+  function syncCatchTime(quiet) {
+    const r = parseCatchTime();
+    const hidden = $("#catchForm").caught_at;
+    $("#catchDate").classList.toggle("bad", !quiet && !!r.error && r.field === "date");
+    $("#catchTime").classList.toggle("bad", !quiet && !!r.error && r.field === "time");
+    const msg = $("#dtMsg");
+    if (r.error) {
+      hidden.value = "";
+      msg.className = "msg err"; msg.textContent = quiet ? "" : r.error;
+      return;
+    }
+    hidden.value = localInputValue(r.date);
+    msg.className = "msg"; msg.textContent = "";
+    checkLateTime();
+  }
+  // Gépelés közbeni formázás: pontok és kettőspont automatikusan
+  function formatDateInput(e) {
+    const el = e.target;
+    let v = el.value.replace(/[^\d]/g, "").slice(0, 8);
+    if (v.length > 6) v = `${v.slice(0, 4)}.${v.slice(4, 6)}.${v.slice(6)}`;
+    else if (v.length > 4) v = `${v.slice(0, 4)}.${v.slice(4)}`;
+    el.value = v;
+    if (v.length === 10) { syncCatchTime(false); $("#catchTime").focus(); }
+  }
+  function formatTimeInput(e) {
+    const el = e.target;
+    let v = el.value.replace(/[^\d]/g, "").slice(0, 4);
+    if (v.length > 2) v = `${v.slice(0, 2)}:${v.slice(2)}`;
+    el.value = v;
+    if (v.length === 5) syncCatchTime(false);
+  }
+  function shiftCatchTime(code) {
+    if (code === "now") { setCatchTime(new Date()); return; }
+    const r = parseCatchTime();
+    const base = r.date || new Date();
+    setCatchTime(new Date(base.getTime() + Number(code) * 60000));
+  }
+
   function uuid() {
     if (crypto.randomUUID) return crypto.randomUUID();
     return "10000000-1000-4000-8000-100000000000".replace(/[018]/g, (c) =>
@@ -91,9 +149,11 @@
     if (/Email not confirmed/i.test(m)) return "Az e-mail-cím még nincs megerősítve. Nézd meg a postafiókodat.";
     if (/already registered|already exists/i.test(m)) return "Ezzel az e-mail-címmel már van regisztráció.";
     if (/Password should be/i.test(m)) return "A jelszó túl rövid vagy túl egyszerű.";
-    if (/rate limit/i.test(m)) return "Túl sok próbálkozás. Várj egy kicsit, és próbáld újra.";
     if (/Failed to fetch|NetworkError|network/i.test(m)) return "Nincs internetkapcsolat.";
     if (/Signups not allowed/i.test(m)) return "A regisztráció jelenleg le van zárva. Kérd az adminisztrátort.";
+    if (/email rate limit|over_email_send_rate_limit/i.test(m)) return "Túl sok e-mail lett kiküldve. Az ingyenes levelező óránként csak néhány levelet küld; próbáld újra később.";
+    if (/same.*password|New password should be different/i.test(m)) return "Az új jelszó nem lehet azonos a régivel.";
+    if (/rate limit/i.test(m)) return "Túl sok próbálkozás. Várj egy kicsit, és próbáld újra.";
     return m;
   }
 
@@ -147,8 +207,10 @@
     outbox: [],          // szinkronizálásra váró saját fogások
     syncing: false,
     photo: null,         // { blob, url } az új fogás űrlapon
-    gps: null,           // { lat, lon, acc }
-    signedUrls: {}       // photo_path -> { url, exp }
+    gps: null,           // { lat, lon, acc, source: "gps" | "map" | "list" | "saved" }
+    signedUrls: {},      // photo_path -> { url, exp }
+    editing: null,       // szerkesztett fogás: { client_id, pending, original }
+    recovery: false      // jelszó-visszaállítási link érkezett
   };
 
   // ------------------------------------------------------------------
@@ -167,7 +229,7 @@
     $$("#bottomNav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
     if (tabId === "tabLog") renderLog();
     if (tabId === "tabStats") renderStats();
-    if (tabId === "tabNew" && !state.gps) requestGps();
+    if (tabId === "tabNew" && !state.gps && !state.editing && isRecentTime()) requestGps(true);
     window.scrollTo(0, 0);
   }
 
@@ -209,8 +271,28 @@
       CFG.SUPABASE_KEY && !/^IDE_JON/.test(CFG.SUPABASE_KEY);
     if (!configured || !window.supabase) { show("viewConfig"); return; }
 
+    // Jelszó-visszaállító linkről érkezett? (az URL-ben "type=recovery" szerepel)
+    state.recovery = /type=recovery/.test(location.hash);
+
     state.sb = window.supabase.createClient(CFG.SUPABASE_URL, CFG.SUPABASE_KEY, {
-      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true }
+      auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit" }
+    });
+
+    state.sb.auth.onAuthStateChange((event, sess) => {
+      if (event === "PASSWORD_RECOVERY") {
+        state.recovery = true;
+        if (sess) state.uid = sess.user.id;
+        show("viewNewPassword");
+        return;
+      }
+      if (state.recovery) return;
+      if (event === "SIGNED_OUT") {
+        state.uid = null; state.me = null;
+        show("viewAuth");
+      } else if (sess && !state.uid) {
+        state.uid = sess.user.id;
+        setTimeout(() => enterApp(), 0);
+      }
     });
 
     state.outbox = (await idb.all("outbox").catch(() => [])) || [];
@@ -222,7 +304,10 @@
       session = data.session;
     } catch (_) { /* offline */ }
 
-    if (session) {
+    if (state.recovery) {
+      if (session) state.uid = session.user.id;
+      show("viewNewPassword");
+    } else if (session) {
       state.uid = session.user.id;
       await enterApp();
     } else {
@@ -238,16 +323,6 @@
         show("viewAuth");
       }
     }
-
-    state.sb.auth.onAuthStateChange((event, sess) => {
-      if (event === "SIGNED_OUT") {
-        state.uid = null; state.me = null;
-        show("viewAuth");
-      } else if (sess && !state.uid) {
-        state.uid = sess.user.id;
-        enterApp();
-      }
-    });
   }
 
   async function loadCache() {
@@ -262,6 +337,7 @@
   }
 
   async function doEnterApp() {
+    if (state.recovery) return;
     await loadCache();
     try {
       const { data, error } = await state.sb.from("profiles").select("*").eq("id", state.uid).maybeSingle();
@@ -330,6 +406,7 @@
     $$(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.auth === mode));
     $$(".reg-only").forEach((el) => el.classList.toggle("hidden", mode !== "register"));
     $("#authSubmit").textContent = mode === "login" ? "Belépés" : "Regisztráció";
+    $("#btnForgot").classList.toggle("hidden", mode !== "login");
     $("#authForm").password.autocomplete = mode === "login" ? "current-password" : "new-password";
     $("#authMsg").textContent = "";
   }
@@ -377,6 +454,64 @@
     }
   }
 
+  // Elfelejtett jelszó: visszaállító link e-mailben
+  async function forgotPassword() {
+    const msg = $("#authMsg");
+    const email = $("#authForm").email.value.trim();
+    msg.className = "msg";
+    if (!email || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+      msg.className = "msg err";
+      msg.textContent = "Írd be fent az e-mail-címedet, majd kattints újra az „Elfelejtettem a jelszavam” gombra.";
+      $("#authForm").email.focus();
+      return;
+    }
+    if (!navigator.onLine) { msg.className = "msg err"; msg.textContent = "Nincs internetkapcsolat."; return; }
+    const btn = $("#btnForgot");
+    btn.disabled = true;
+    msg.textContent = "Küldés…";
+    try {
+      const redirectTo = new URL("./", location.href).href;
+      const { error } = await state.sb.auth.resetPasswordForEmail(email, { redirectTo });
+      if (error) throw error;
+      msg.className = "msg ok";
+      msg.textContent = "Ha ezzel a címmel van regisztráció, hamarosan érkezik egy levél a jelszó-visszaállító linkkel. Nézd meg a levélszemét mappát is.";
+    } catch (e) {
+      msg.className = "msg err";
+      msg.textContent = errText(e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
+  async function onNewPassword(ev) {
+    ev.preventDefault();
+    const msg = $("#newPassMsg");
+    const p1 = $("#newPass1").value, p2 = $("#newPass2").value;
+    msg.className = "msg err";
+    if (p1.length < 8) { msg.textContent = "A jelszó legalább 8 karakter legyen."; return; }
+    if (p1 !== p2) { msg.textContent = "A két jelszó nem egyezik."; return; }
+    const btn = $("#btnNewPass");
+    btn.disabled = true;
+    msg.className = "msg"; msg.textContent = "Mentés…";
+    try {
+      const { error } = await state.sb.auth.updateUser({ password: p1 });
+      if (error) throw error;
+      state.recovery = false;
+      history.replaceState(null, "", location.pathname + location.search);
+      $("#newPass1").value = ""; $("#newPass2").value = "";
+      toast("Az új jelszó mentve.");
+      const { data } = await state.sb.auth.getSession();
+      if (data.session) { state.uid = data.session.user.id; await enterApp(); }
+      else show("viewAuth");
+    } catch (e) {
+      msg.className = "msg err";
+      msg.textContent = /session/i.test(String(e && e.message)) ?
+        "A visszaállító link lejárt vagy már felhasználták. Kérj új linket a belépő oldalon." : errText(e);
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   async function logout() {
     if (state.outbox.length && !confirm(`${state.outbox.length} fogás még nincs feltöltve. Kijelentkezés után is megmaradnak ezen a telefonon, és a következő belépéskor feltöltődnek. Kijelentkezel?`)) return;
     $("#menuPanel").classList.add("hidden");
@@ -396,16 +531,29 @@
     $("#speciesList").innerHTML = species.map((s) => `<option value="${esc(s)}">`).join("");
     $("#waterList").innerHTML = uniq(all.map((c) => c.water)).map((s) => `<option value="${esc(s)}">`).join("");
     $("#baitList").innerHTML = uniq(all.map((c) => c.bait)).map((s) => `<option value="${esc(s)}">`).join("");
+    fillPlaces();
   }
 
-  function resetForm() {
+  function resetForm(forEdit) {
     const f = $("#catchForm");
-    const keepWater = f.water.value;
+    const wasEditing = !!state.editing;
+    const keepWater = wasEditing ? "" : f.water.value;
     f.reset();
     f.water.value = keepWater; // ugyanazon a vízen általában több hal is jön
-    f.caught_at.value = localInputValue();
+    setCatchTime(new Date());
     clearPhoto();
+    state.photoRemoved = false;
+    state.editing = null;
+    $("#formTitle").textContent = "Új fogás";
+    $("#btnCancelEdit").classList.add("hidden");
+    $("#btnSave").textContent = "Mentés";
+    $("#editInfo").classList.add("hidden");
+    f.classList.remove("editing");
     $("#saveMsg").textContent = "";
+    $("#lateWarn").classList.add("hidden");
+    // Friss fogásnál a GPS-pozíció megmarad (ugyanaz a hely), egyébként törlődik
+    if (forEdit || wasEditing || (state.gps && state.gps.source !== "gps")) setLocation(null);
+    else renderLocation();
   }
 
   function clearPhoto() {
@@ -484,6 +632,7 @@
       }
     }
     clearPhoto();
+    state.photoRemoved = false;
     state.photo = { blob, url: URL.createObjectURL(blob) };
     const img = $("#photoPreview");
     img.onerror = () => setPhotoMsg("Az előnézet nem jeleníthető meg, de a fotó a fogással együtt mentésre kerül.", false);
@@ -494,67 +643,198 @@
     setPhotoMsg(note || `Fotó csatolva (${Math.round(blob.size / 1024)} kB).`, false);
   }
 
-  function requestGps() {
+  // ------------------------------------------------------------------
+  // A fogás helye: GPS / térkép / korábbi helyek
+  // ------------------------------------------------------------------
+  const RECENT_MINUTES = 60; // ennél régebbi időpontnál utólagos rögzítésnek számít
+
+  function isRecentTime() {
+    const v = $("#catchForm").caught_at.value;
+    if (!v) return true;
+    const t = new Date(v).getTime();
+    return isNaN(t) || Math.abs(Date.now() - t) <= RECENT_MINUTES * 60000;
+  }
+
+  function setLocation(loc) {
+    state.gps = loc;
+    renderLocation();
+  }
+
+  function renderLocation() {
+    const st = $("#gpsStatus");
+    const g = state.gps;
+    $("#btnLocClear").classList.toggle("hidden", !g);
+    if (!g) {
+      st.textContent = isRecentTime()
+        ? "Még nincs megadva."
+        : "Még nincs megadva. Jelöld ki a térképen, vagy válassz a korábbi helyek közül.";
+      return;
+    }
+    const src = { gps: "jelenlegi pozíció (GPS)", map: "térképen kijelölve", list: "korábbi helyről", saved: "mentett hely" }[g.source] || "";
+    st.textContent = `${g.lat.toFixed(5)}, ${g.lon.toFixed(5)}${g.acc ? ` (±${Math.round(g.acc)} m)` : ""} – ${src}`;
+  }
+
+  // Ha az időpont régebbi: figyelmeztetés, és az automatikusan kapott GPS-pozíciót elvetjük
+  function checkLateTime() {
+    const late = !isRecentTime();
+    const w = $("#lateWarn");
+    w.classList.toggle("hidden", !late);
+    if (late) {
+      w.textContent = "Utólagos rögzítés: a jelenlegi tartózkodási helyed valószínűleg nem a fogás helye. Add meg a helyet a térképen vagy a korábbi helyek közül.";
+      if (state.gps && state.gps.source === "gps" && state.gps.auto) {
+        setLocation(null);
+        toast("Az automatikus pozíciót töröltem, mert a fogás időpontja korábbi.");
+      }
+    }
+    renderLocation();
+  }
+
+  function requestGps(auto) {
     const st = $("#gpsStatus");
     if (!("geolocation" in navigator)) { st.textContent = "Ez a készülék nem támogatja a helymeghatározást."; return; }
+    if (auto && !isRecentTime()) return;
     st.textContent = "Pozíció keresése…";
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        state.gps = { lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy };
-        st.textContent = `${state.gps.lat.toFixed(5)}, ${state.gps.lon.toFixed(5)} (±${Math.round(state.gps.acc)} m)`;
+        if (auto && (!isRecentTime() || (state.gps && state.gps.source !== "gps"))) return; // közben mást választott
+        setLocation({ lat: pos.coords.latitude, lon: pos.coords.longitude, acc: pos.coords.accuracy, source: "gps", auto: !!auto });
+        if (!auto && !isRecentTime()) toast("Figyelem: a jelenlegi helyedet rögzítettem, de a fogás időpontja korábbi.");
       },
       (err) => {
-        state.gps = null;
+        if (state.gps) { renderLocation(); return; }
         st.textContent = err.code === 1
-          ? "A helymeghatározás nincs engedélyezve. Engedélyezd a böngésző beállításaiban."
-          : "Nem sikerült pozíciót kapni. Próbáld újra a szabad ég alatt.";
+          ? "A helymeghatározás nincs engedélyezve. Engedélyezd a böngésző beállításaiban, vagy jelöld ki a helyet a térképen."
+          : "Nem sikerült pozíciót kapni. Próbáld újra a szabad ég alatt, vagy jelöld ki a helyet a térképen.";
       },
       { enableHighAccuracy: true, timeout: 20000, maximumAge: 60000 }
     );
   }
 
-  async function onSave(ev) {
-    ev.preventDefault();
-    const f = ev.target;
-    const msg = $("#saveMsg");
-    msg.className = "msg";
+  // Korábbi fogáshelyek (a társaság összes fogásából, gyakoriság szerint)
+  function fillPlaces() {
+    const map = new Map();
+    state.catches.concat(state.outbox).forEach((c) => {
+      if (c.lat == null || c.lon == null) return;
+      const key = `${(c.water || "").trim()}|${(c.spot || "").trim()}|${Number(c.lat).toFixed(3)}|${Number(c.lon).toFixed(3)}`;
+      const e = map.get(key) || { water: c.water || "", spot: c.spot || "", lat: Number(c.lat), lon: Number(c.lon), n: 0, mine: 0 };
+      e.n++;
+      if (c.user_id === state.uid) e.mine++;
+      map.set(key, e);
+    });
+    state.places = Array.from(map.values()).sort((a, b) => b.mine - a.mine || b.n - a.n || a.water.localeCompare(b.water, "hu"));
+    const sel = $("#prevPlaces");
+    sel.innerHTML = `<option value="">${state.places.length ? "— válassz a korábbi fogáshelyek közül —" : "— még nincs korábbi fogáshely —"}</option>` +
+      state.places.map((p, i) => `<option value="${i}">${esc(p.water)}${p.spot ? " – " + esc(p.spot) : ""} (${p.n}×)</option>`).join("");
+  }
 
+  function onPlacePicked() {
+    const sel = $("#prevPlaces");
+    const p = state.places && state.places[Number(sel.value)];
+    sel.value = "";
+    if (!p) return;
+    setLocation({ lat: p.lat, lon: p.lon, acc: null, source: "list" });
+    const f = $("#catchForm");
+    if (p.water) f.water.value = p.water;
+    if (p.spot && !f.spot.value.trim()) f.spot.value = p.spot;
+  }
+
+  // Térképes kijelölés (Leaflet + OpenStreetMap; internet kell hozzá)
+  let lmap = null, lmarker = null, pick = null;
+  function openMap() {
+    if (!window.L) { toast("A térkép nem töltődött be. Ellenőrizd az internetkapcsolatot."); return; }
+    if (!navigator.onLine) { toast("A térképhez internetkapcsolat kell. Offline a korábbi helyek közül választhatsz."); return; }
+    $("#mapModal").classList.remove("hidden");
+    const last = state.catches.find((c) => c.lat != null);
+    const center = state.gps ? [state.gps.lat, state.gps.lon] : last ? [last.lat, last.lon] : [47.16, 19.5];
+    const zoom = state.gps ? 15 : last ? 12 : 7;
+    if (!lmap) {
+      lmap = L.map("mapCanvas", { zoomControl: true });
+      L.tileLayer(CFG.MAP_TILES || "https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+        maxZoom: 19,
+        attribution: '&copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> közreműködők'
+      }).addTo(lmap);
+      lmap.on("click", (e) => setPick(e.latlng.lat, e.latlng.lng));
+    }
+    lmap.setView(center, zoom);
+    pick = null;
+    if (lmarker) { lmarker.remove(); lmarker = null; }
+    if (state.gps) setPick(state.gps.lat, state.gps.lon);
+    else { $("#mapInfo").textContent = "Még nincs kijelölve."; $("#btnMapOk").disabled = true; }
+    setTimeout(() => lmap.invalidateSize(), 50);
+  }
+
+  function setPick(lat, lon) {
+    pick = { lat, lon };
+    if (lmarker) lmarker.setLatLng([lat, lon]);
+    else lmarker = L.marker([lat, lon]).addTo(lmap);
+    $("#mapInfo").textContent = `${lat.toFixed(5)}, ${lon.toFixed(5)}`;
+    $("#btnMapOk").disabled = false;
+  }
+
+  function mapLocate() {
+    if (!("geolocation" in navigator)) return;
+    navigator.geolocation.getCurrentPosition(
+      (pos) => { setPick(pos.coords.latitude, pos.coords.longitude); lmap.setView([pos.coords.latitude, pos.coords.longitude], 16); },
+      () => toast("Nem sikerült pozíciót kapni."),
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 60000 }
+    );
+  }
+
+  function closeMap(ok) {
+    if (ok && pick) setLocation({ lat: pick.lat, lon: pick.lon, acc: null, source: "map" });
+    $("#mapModal").classList.add("hidden");
+  }
+
+  // ------------------------------------------------------------------
+  // Mentés: új fogás vagy meglévő szerkesztése
+  // ------------------------------------------------------------------
+  function readForm() {
+    const f = $("#catchForm");
     const species = f.species.value.trim();
     const water = f.water.value.trim();
-    const when = f.caught_at.value;
-    if (!species || !water || !when) {
-      msg.className = "msg err";
-      msg.textContent = "A halfaj, az időpont és a vízterület kitöltése kötelező.";
-      return;
-    }
+    const pr = parseCatchTime();
+    if (pr.error) return { error: pr.error };
+    const when = localInputValue(pr.date);
+    if (!species || !water || !when) return { error: "A halfaj, az időpont és a vízterület kitöltése kötelező." };
     const caughtAt = new Date(when);
-    if (isNaN(caughtAt)) { msg.className = "msg err"; msg.textContent = "Érvénytelen időpont."; return; }
-    if (caughtAt.getTime() > Date.now() + 10 * 60 * 1000) {
-      msg.className = "msg err"; msg.textContent = "Az időpont nem lehet a jövőben."; return;
-    }
+    if (isNaN(caughtAt)) return { error: "Érvénytelen időpont." };
+    if (caughtAt.getTime() > Date.now() + 10 * 60 * 1000) return { error: "Az időpont nem lehet a jövőben." };
     const num = (v) => (v === "" || v == null ? null : Number(String(v).replace(",", ".")));
+    return {
+      data: {
+        caught_at: caughtAt.toISOString(),
+        species,
+        weight_kg: num(f.weight_kg.value),
+        length_cm: num(f.length_cm.value),
+        water,
+        spot: f.spot.value.trim() || null,
+        bait: f.bait.value.trim() || null,
+        method: f.method.value || null,
+        released: f.released.checked,
+        note: f.note.value.trim() || null,
+        lat: state.gps ? state.gps.lat : null,
+        lon: state.gps ? state.gps.lon : null,
+        accuracy_m: state.gps && state.gps.acc ? Math.round(state.gps.acc) : null
+      }
+    };
+  }
 
-    const item = {
+  async function onSave(ev) {
+    ev.preventDefault();
+    const msg = $("#saveMsg");
+    msg.className = "msg";
+    const r = readForm();
+    if (r.error) { msg.className = "msg err"; msg.textContent = r.error; return; }
+    if (state.editing) return saveEdit(r.data);
+
+    const item = Object.assign({
       client_id: uuid(),
       user_id: state.uid,
-      caught_at: caughtAt.toISOString(),
-      species,
-      weight_kg: num(f.weight_kg.value),
-      length_cm: num(f.length_cm.value),
-      water,
-      spot: f.spot.value.trim() || null,
-      bait: f.bait.value.trim() || null,
-      method: f.method.value || null,
-      released: f.released.checked,
-      note: f.note.value.trim() || null,
-      lat: state.gps ? state.gps.lat : null,
-      lon: state.gps ? state.gps.lon : null,
-      accuracy_m: state.gps ? Math.round(state.gps.acc) : null,
-      photo: state.photo ? state.photo.blob : null,
+      photo: state.photo && state.photo.blob ? state.photo.blob : null,
       photo_path: null,
       weather: undefined,
       created_local: new Date().toISOString()
-    };
+    }, r.data);
 
     try {
       await idb.put("outbox", item);
@@ -567,6 +847,135 @@
     } catch (e) {
       msg.className = "msg err";
       msg.textContent = "A mentés nem sikerült: " + errText(e);
+    }
+  }
+
+  // Meglévő fogás betöltése szerkesztésre
+  async function startEdit(clientId) {
+    const pending = state.outbox.find((x) => x.client_id === clientId);
+    const synced = state.catches.find((x) => x.client_id === clientId);
+    const c = pending || synced;
+    if (!c) return;
+    const isAdmin = !!(state.me && state.me.is_admin);
+    if (c.user_id !== state.uid && !(isAdmin && !pending)) { toast("Csak a saját fogásodat szerkesztheted."); return; }
+    if (!pending && !navigator.onLine) { toast("A már feltöltött fogás szerkesztéséhez internetkapcsolat kell."); return; }
+
+    resetForm(true);
+    state.editing = { client_id: clientId, pending: !!pending, original: Object.assign({}, c) };
+    const f = $("#catchForm");
+    f.species.value = c.species || "";
+    f.weight_kg.value = c.weight_kg != null ? c.weight_kg : "";
+    f.length_cm.value = c.length_cm != null ? c.length_cm : "";
+    setCatchTime(new Date(c.caught_at));
+    f.water.value = c.water || "";
+    f.spot.value = c.spot || "";
+    f.bait.value = c.bait || "";
+    f.method.value = c.method || "";
+    f.released.checked = !!c.released;
+    f.note.value = c.note || "";
+    setLocation(c.lat != null ? { lat: Number(c.lat), lon: Number(c.lon), acc: c.accuracy_m, source: "saved" } : null);
+
+    // Meglévő fotó megjelenítése
+    let url = null;
+    if (pending && c.photo) url = URL.createObjectURL(c.photo);
+    else if (c.photo_path) url = await signedUrl(c.photo_path);
+    if (url || c.photo_path) {
+      state.photo = { existing: true, url };
+      if (url) { $("#photoPreview").src = url; $("#photoPreview").classList.remove("hidden"); $("#photoEmpty").classList.add("hidden"); }
+      $("#btnPhotoRemove").classList.remove("hidden");
+    }
+
+    $("#formTitle").textContent = "Fogás szerkesztése";
+    $("#btnCancelEdit").classList.remove("hidden");
+    $("#btnSave").textContent = "Módosítás mentése";
+    f.classList.add("editing");
+    const info = $("#editInfo");
+    info.textContent = `Rögzítette: ${nameOf(c.user_id)}` + (c.updated_at ? ` · utoljára módosítva: ${dtFmt(c.updated_at)}` : "");
+    info.classList.remove("hidden");
+    checkLateTime();
+    $("#lateWarn").classList.add("hidden");
+    showTab("tabNew");
+  }
+
+  function cancelEdit() {
+    resetForm();
+    showTab("tabLog");
+  }
+
+  async function saveEdit(data) {
+    const ed = state.editing;
+    const o = ed.original;
+    const msg = $("#saveMsg");
+    const btn = $("#btnSave");
+    const newPhoto = state.photo && state.photo.blob ? state.photo.blob : null;
+    const removePhoto = !!state.photoRemoved && !newPhoto;
+    const sameTime = new Date(o.caught_at).getTime() === new Date(data.caught_at).getTime();
+    const samePlace = (o.lat == null && data.lat == null) ||
+      (o.lat != null && data.lat != null && Math.abs(o.lat - data.lat) < 1e-6 && Math.abs(o.lon - data.lon) < 1e-6);
+    const weatherStale = !(sameTime && samePlace);
+
+    btn.disabled = true;
+    msg.className = "msg"; msg.textContent = "Mentés…";
+    try {
+      if (ed.pending) {
+        // Még fel nem töltött fogás: helyben módosítjuk, a feltöltés később történik
+        const item = state.outbox.find((x) => x.client_id === ed.client_id);
+        if (!item) throw new Error("A fogás közben feltöltődött. Nyisd meg újra a szerkesztést a naplóból.");
+        Object.assign(item, data);
+        if (newPhoto) { item.photo = newPhoto; item.photo_path = null; }
+        if (removePhoto) { item.photo = null; item.photo_path = null; }
+        if (weatherStale) item.weather = undefined;
+        await idb.put("outbox", item);
+        toast("Módosítás mentve.");
+        resetForm();
+        showTab("tabLog");
+        syncOutbox();
+        return;
+      }
+
+      if (!navigator.onLine) throw new Error("Nincs internetkapcsolat. A módosítás nem került mentésre.");
+      const row = Object.assign({}, data);
+      if (weatherStale) {
+        row.weather = null;
+        if (row.lat != null) {
+          try { row.weather = await fetchWeather(row.lat, row.lon, row.caught_at); }
+          catch (we) { console.warn(we); toast("Az időjárási adat most nem kérhető le; a fogás időjárás nélkül módosult."); }
+        }
+      }
+      let oldPath = null;
+      if (newPhoto) {
+        const type = newPhoto.type || "image/jpeg";
+        const ext = ({ "image/png": "png", "image/webp": "webp", "image/heic": "heic", "image/heif": "heif" })[type] || "jpg";
+        const path = `${o.user_id}/${o.client_id}-${Date.now()}.${ext}`;
+        const { error: upErr } = await state.sb.storage.from("photos").upload(path, newPhoto, { contentType: type, upsert: true });
+        if (upErr) throw upErr;
+        row.photo_path = path;
+        oldPath = o.photo_path;
+      } else if (removePhoto) {
+        row.photo_path = null;
+        oldPath = o.photo_path;
+      }
+      row.updated_at = new Date().toISOString();
+      row.updated_by = state.uid;
+
+      let { data: upd, error } = await state.sb.from("catches").update(row).eq("client_id", o.client_id).select("client_id");
+      if (error && /updated_(at|by)/.test(error.message || "")) {
+        // A 2. verziós adatbázis-frissítés még nem futott le: módosítás a régi oszlopokkal
+        delete row.updated_at; delete row.updated_by;
+        ({ data: upd, error } = await state.sb.from("catches").update(row).eq("client_id", o.client_id).select("client_id"));
+      }
+      if (error) throw error;
+      if (!upd || !upd.length) throw new Error("Nincs jogosultságod ennek a fogásnak a módosításához.");
+      if (oldPath) state.sb.storage.from("photos").remove([oldPath]).catch(() => {});
+      toast("Módosítás mentve.");
+      resetForm();
+      await refreshData();
+      showTab("tabLog");
+    } catch (e) {
+      msg.className = "msg err";
+      msg.textContent = "A módosítás nem sikerült: " + errText(e);
+    } finally {
+      btn.disabled = false;
     }
   }
 
@@ -817,12 +1226,14 @@
         .filter(Boolean).join(", ");
       const tags = [
         c._pending ? `<span class="tag pending">Feltöltésre vár</span>` : "",
-        c.released ? `<span class="tag">Visszaengedve</span>` : ""
+        c.released ? `<span class="tag">Visszaengedve</span>` : "",
+        c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : ""
       ].join("");
       const meta = [nameOf(c.user_id), dtFmt(c.caught_at)].join(" · ");
       const where = [c.water, c.spot].filter(Boolean).join(" – ");
       const how = [c.bait, c.method].filter(Boolean).join(" · ");
       const own = c.user_id === state.uid;
+      const canEdit = own || (!c._pending && state.me && state.me.is_admin);
       const map = c.lat != null ? `<a href="https://www.google.com/maps?q=${c.lat},${c.lon}" target="_blank" rel="noopener">Térkép</a>` : "";
       const hasPhoto = c._pending ? !!c.photo : !!c.photo_path;
       return `
@@ -839,7 +1250,8 @@
             <div style="margin-top:4px">${tags}</div>
             <div class="catch-actions">
               ${map}
-              ${own ? `<button type="button" class="link btn-del" data-id="${esc(c.client_id)}">Törlés</button>` : ""}
+              ${canEdit ? `<button type="button" class="link btn-edit" data-id="${esc(c.client_id)}">Szerkesztés</button>` : ""}
+              ${canEdit ? `<button type="button" class="link btn-del" data-id="${esc(c.client_id)}">Törlés</button>` : ""}
             </div>
           </div>
         </div>`;
@@ -873,8 +1285,9 @@
       } else {
         if (!navigator.onLine) { toast("Törléshez internetkapcsolat szükséges."); return; }
         const c = state.catches.find((x) => x.client_id === clientId);
-        const { error } = await state.sb.from("catches").delete().eq("client_id", clientId);
+        const { data: del, error } = await state.sb.from("catches").delete().eq("client_id", clientId).select("client_id");
         if (error) throw error;
+        if (!del || !del.length) throw new Error("Nincs jogosultságod ennek a fogásnak a törléséhez.");
         if (c && c.photo_path) await state.sb.storage.from("photos").remove([c.photo_path]).catch(() => {});
         state.catches = state.catches.filter((x) => x.client_id !== clientId);
         await idb.put("kv", state.catches, "catches");
@@ -1065,8 +1478,25 @@
     $("#catchForm").addEventListener("submit", onSave);
     $("#photoCamera").addEventListener("change", onPhotoPicked);
     $("#photoGallery").addEventListener("change", onPhotoPicked);
-    $("#btnPhotoRemove").addEventListener("click", clearPhoto);
-    $("#btnGps").addEventListener("click", requestGps);
+    $("#btnPhotoRemove").addEventListener("click", () => {
+      if (state.photo && state.photo.existing) state.photoRemoved = true;
+      clearPhoto();
+    });
+    $("#btnGps").addEventListener("click", () => requestGps(false));
+    $("#btnMap").addEventListener("click", openMap);
+    $("#btnLocClear").addEventListener("click", () => setLocation(null));
+    $("#prevPlaces").addEventListener("change", onPlacePicked);
+    $("#btnMapClose").addEventListener("click", () => closeMap(false));
+    $("#btnMapOk").addEventListener("click", () => closeMap(true));
+    $("#btnMapLocate").addEventListener("click", mapLocate);
+    $("#catchDate").addEventListener("input", formatDateInput);
+    $("#catchTime").addEventListener("input", formatTimeInput);
+    $("#catchDate").addEventListener("blur", () => syncCatchTime(false));
+    $("#catchTime").addEventListener("blur", () => syncCatchTime(false));
+    $$(".chip[data-shift]").forEach((b) => b.addEventListener("click", () => shiftCatchTime(b.dataset.shift)));
+    $("#btnCancelEdit").addEventListener("click", cancelEdit);
+    $("#btnForgot").addEventListener("click", forgotPassword);
+    $("#newPassForm").addEventListener("submit", onNewPassword);
     $$("#bottomNav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
     ["#fYear", "#fUser", "#fWater", "#fSpecies"].forEach((s) => $(s).addEventListener("change", renderLog));
     ["#sYear", "#sMode"].forEach((s) => $(s).addEventListener("change", renderStats));
@@ -1086,6 +1516,8 @@
       }
       const del = e.target.closest(".btn-del");
       if (del) deleteEntry(del.dataset.id);
+      const ed = e.target.closest(".btn-edit");
+      if (ed) startEdit(ed.dataset.id);
       const mem = e.target.closest("[data-member]");
       if (mem) setApproval(mem.dataset.member, mem.dataset.ok === "1");
     });

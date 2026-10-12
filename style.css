@@ -133,9 +133,33 @@ h3 { margin: 0 0 8px; font-size: 16px; }
 .photo-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 10px 0 4px; }
 
 .gps {
-  display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  display: flex; flex-direction: column; gap: 6px;
   border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px; margin-top: 12px;
 }
+.loc-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.loc-prev { margin: 4px 0 0; }
+.msg.warn { color: var(--warn); }
+.dt-row input { display: block; width: 100%; margin-top: 4px; font: inherit; font-size: 18px; letter-spacing: .02em;
+  color: var(--ink); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; padding: 11px 12px; min-height: 46px;
+  font-variant-numeric: tabular-nums; }
+.dt-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dt-row input.bad { border-color: var(--bad); }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.chip { font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 999px; border: 1px solid var(--line);
+  background: var(--surface); color: var(--ink); cursor: pointer; min-height: 34px; }
+.chip:active { background: var(--bg); }
+.form-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.form-head h2 { margin: 0; }
+#catchForm.editing { border: 2px solid var(--accent); }
+.login-only { display: block; margin: 10px auto 0; }
+
+/* Térkép-választó */
+.map-modal { position: fixed; inset: 0; z-index: 60; background: var(--surface); display: flex; flex-direction: column;
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom); }
+.map-head, .map-foot { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 16px; }
+.map-foot { flex-wrap: wrap; border-top: 1px solid var(--line); }
+.map-foot-btns { display: flex; gap: 8px; }
+#mapCanvas { flex: 1; min-height: 200px; }
 
 /* Napló */
 .filters .row2 + .row2 { margin-top: 8px; }

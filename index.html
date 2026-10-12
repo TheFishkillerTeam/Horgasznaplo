@@ -12,6 +12,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-title" content="TFT Napló">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <link rel="stylesheet" href="vendor/leaflet/leaflet.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
@@ -70,7 +71,25 @@
           </label>
           <p class="hint reg-only hidden">Legalább 8 karakter. Regisztráció után az adminisztrátor hagyja jóvá a tagságot.</p>
           <button class="btn primary block" type="submit" id="authSubmit">Belépés</button>
+          <button type="button" class="link login-only" id="btnForgot">Elfelejtettem a jelszavam</button>
           <p id="authMsg" class="msg" role="status"></p>
+        </form>
+      </div>
+    </section>
+
+    <!-- Új jelszó megadása (e-mailes visszaállítás után) -->
+    <section id="viewNewPassword" class="view hidden">
+      <div class="card narrow">
+        <h2>Új jelszó megadása</h2>
+        <form id="newPassForm">
+          <label class="field">Új jelszó (legalább 8 karakter)
+            <input id="newPass1" type="password" minlength="8" required autocomplete="new-password">
+          </label>
+          <label class="field">Új jelszó még egyszer
+            <input id="newPass2" type="password" minlength="8" required autocomplete="new-password">
+          </label>
+          <button class="btn primary block" type="submit" id="btnNewPass">Jelszó mentése</button>
+          <p id="newPassMsg" class="msg" role="status"></p>
         </form>
       </div>
     </section>
@@ -90,7 +109,11 @@
       <!-- ÚJ FOGÁS -->
       <div id="tabNew" class="tab">
         <form id="catchForm" class="card" novalidate>
-          <h2>Új fogás</h2>
+          <div class="form-head">
+            <h2 id="formTitle">Új fogás</h2>
+            <button type="button" class="btn small hidden" id="btnCancelEdit">Mégse</button>
+          </div>
+          <p id="editInfo" class="hint hidden"></p>
 
           <div class="photo-box" id="photoBox">
             <img id="photoPreview" alt="" class="hidden">
@@ -121,9 +144,23 @@
             </label>
           </div>
 
-          <label class="field">Időpont *
-            <input name="caught_at" type="datetime-local" required>
-          </label>
+          <div class="field">A fogás időpontja *
+            <div class="row2 dt-row">
+              <input id="catchDate" type="text" inputmode="numeric" placeholder="ÉÉÉÉ.HH.NN" maxlength="10" autocomplete="off" aria-label="A fogás dátuma (év.hónap.nap)">
+              <input id="catchTime" type="text" inputmode="numeric" placeholder="ÓÓ:PP" maxlength="5" autocomplete="off" aria-label="A fogás ideje (óra:perc)">
+            </div>
+            <input name="caught_at" type="hidden">
+            <div class="chips" role="group" aria-label="Gyors időpontválasztás">
+              <button type="button" class="chip" data-shift="now">Most</button>
+              <button type="button" class="chip" data-shift="-30">−30 perc</button>
+              <button type="button" class="chip" data-shift="-60">−1 óra</button>
+              <button type="button" class="chip" data-shift="-180">−3 óra</button>
+              <button type="button" class="chip" data-shift="-1440">−1 nap</button>
+            </div>
+            <p id="dtMsg" class="msg" role="status"></p>
+          </div>
+          <p class="hint">Utólagos rögzítésnél állítsd be a fogás valódi idejét. Az időjárás és a holdfázis ehhez az időponthoz készül, nem a mentés idejéhez.</p>
+          <p id="lateWarn" class="msg warn hidden" role="status"></p>
 
           <label class="field">Vízterület *
             <input name="water" list="waterList" required maxlength="80" placeholder="pl. Zagyva, jászberényi szakasz">
@@ -163,11 +200,16 @@
           </label>
 
           <div class="gps">
-            <div>
-              <strong>Helymeghatározás</strong>
-              <div id="gpsStatus" class="hint">Még nincs pozíció.</div>
+            <strong>A fogás helye</strong>
+            <div id="gpsStatus" class="hint">Még nincs megadva.</div>
+            <div class="loc-actions">
+              <button type="button" class="btn small" id="btnGps">📍 Jelenlegi helyem</button>
+              <button type="button" class="btn small" id="btnMap">🗺 Térképen</button>
+              <button type="button" class="btn small hidden" id="btnLocClear">Törlés</button>
             </div>
-            <button type="button" class="btn small" id="btnGps">Pozíció</button>
+            <label class="field loc-prev">Korábbi helyek
+              <select id="prevPlaces"><option value="">— válassz a korábbi fogáshelyek közül —</option></select>
+            </label>
           </div>
           <p class="hint">Az időjárási adatokat (hőmérséklet, légnyomás, szélirány és -sebesség) az app a fogás helye és időpontja alapján automatikusan rögzíti, amint van internetkapcsolat. A holdfázist az időpontból számolja, ehhez nem kell internet. Időjárási adatok: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0).</p>
 
@@ -232,12 +274,28 @@
 
   <div id="toast" class="toast hidden" role="status"></div>
 
+  <div id="mapModal" class="map-modal hidden" role="dialog" aria-label="Fogás helyének kijelölése">
+    <div class="map-head">
+      <strong>Koppints a fogás helyére</strong>
+      <button type="button" class="btn small" id="btnMapClose">Mégse</button>
+    </div>
+    <div id="mapCanvas"></div>
+    <div class="map-foot">
+      <span id="mapInfo" class="hint">Még nincs kijelölve.</span>
+      <div class="map-foot-btns">
+        <button type="button" class="btn small" id="btnMapLocate">📍 Ide</button>
+        <button type="button" class="btn small primary" id="btnMapOk" disabled>Kiválasztom</button>
+      </div>
+    </div>
+  </div>
+
   <div id="photoModal" class="modal hidden">
     <img id="photoModalImg" alt="Fogás fotója">
   </div>
 
   <script src="config.js"></script>
   <script src="supabase.js"></script>
+  <script src="vendor/leaflet/leaflet.js"></script>
   <script src="app.js"></script>
 </body>
 </html>
