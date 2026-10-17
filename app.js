@@ -213,6 +213,9 @@
     recovery: false      // jelszó-visszaállítási link érkezett
   };
 
+  let trips = null;     // Horgásztúra napló modul (trips.js)
+  let records = null;   // Rekordlisták (records.js)
+
   // ------------------------------------------------------------------
   // Nézetek
   // ------------------------------------------------------------------
@@ -230,6 +233,7 @@
     if (tabId === "tabLog") { renderLog(); updatePushHint(); }
     if (tabId === "tabGallery") renderGallery();
     if (tabId === "tabStats") renderStats();
+    if (tabId === "tabTrips" && trips) trips.render();
     if (tabId === "tabNew" && !state.gps && !state.editing && isRecentTime()) requestGps(true);
     window.scrollTo(0, 0);
   }
@@ -257,6 +261,16 @@
     }
 
     bindUi();
+    if (typeof window.TFTTrips === "function") {
+      trips = window.TFTTrips({
+        state, $, esc, numFmt, dtFmt, tzParts, toast, errText, idb, uuid, TZ, CFG, APP_URL,
+        nameOf, anglerOf, everyEntry, cardHtml, loadThumbs, photoCount, catchPhotoPaths, captionOf,
+        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip
+      });
+    }
+    if (typeof window.TFTRecords === "function") {
+      records = window.TFTRecords({ $, esc, numFmt, dtFmt, tzParts, nameOf, allEntries, cardHtml, loadThumbs, trips });
+    }
     updateNet();
 
     // iPhone-on, ha nincs telepítve: figyelmeztetés a kezdőképernyőre tételről
@@ -329,6 +343,7 @@
   async function loadCache() {
     state.catches = (await idb.get("kv", "catches").catch(() => null)) || [];
     state.profiles = (await idb.get("kv", "profiles").catch(() => null)) || {};
+    if (trips) await trips.loadCache();
   }
 
   let entering = null;
@@ -399,6 +414,7 @@
     } catch (e) {
       console.warn("Frissítés sikertelen:", e);
     }
+    if (trips) await trips.refresh();
   }
 
   // ------------------------------------------------------------------
@@ -555,6 +571,8 @@
     f.classList.remove("editing");
     $("#saveMsg").textContent = "";
     $("#lateWarn").classList.add("hidden");
+    state.tripCtx = null;
+    $("#tripCtx").classList.add("hidden");
     // Friss fogásnál a GPS-pozíció megmarad (ugyanaz a hely), egyébként törlődik
     if (forEdit || wasEditing || (state.gps && state.gps.source !== "gps")) setLocation(null);
     else renderLocation();
@@ -828,14 +846,17 @@
   }
 
   // Térképes kijelölés (Leaflet + OpenStreetMap; internet kell hozzá)
-  let lmap = null, lmarker = null, pick = null;
-  function openMap() {
+  let lmap = null, lmarker = null, pick = null, mapCtx = null;
+  // opts (nem kötelező): { center: {lat, lon}, onPick(lat, lon) } – pl. a túra helyének kijelöléséhez
+  function openMap(opts) {
+    mapCtx = opts && opts.onPick ? opts : null;
+    const own = mapCtx ? (mapCtx.center || null) : state.gps;
     if (!window.L) { toast("A térkép nem töltődött be. Ellenőrizd az internetkapcsolatot."); return; }
     if (!navigator.onLine) { toast("A térképhez internetkapcsolat kell. Offline a korábbi helyek közül választhatsz."); return; }
     $("#mapModal").classList.remove("hidden");
     const last = state.catches.find((c) => c.lat != null);
-    const center = state.gps ? [state.gps.lat, state.gps.lon] : last ? [last.lat, last.lon] : [47.16, 19.5];
-    const zoom = state.gps ? 15 : last ? 12 : 7;
+    const center = own ? [own.lat, own.lon] : last ? [last.lat, last.lon] : [47.16, 19.5];
+    const zoom = own ? 15 : last ? 12 : 7;
     if (!lmap) {
       lmap = L.map("mapCanvas", { zoomControl: true });
       L.tileLayer(CFG.MAP_TILES || "https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
@@ -847,7 +868,8 @@
     lmap.setView(center, zoom);
     pick = null;
     if (lmarker) { lmarker.remove(); lmarker = null; }
-    if (state.gps) setPick(state.gps.lat, state.gps.lon);
+    $("#mapTitle").textContent = mapCtx ? "Koppints a túra helyére" : "Koppints a fogás helyére";
+    if (own) setPick(own.lat, own.lon);
     else { $("#mapInfo").textContent = "Még nincs kijelölve."; $("#btnMapOk").disabled = true; }
     setTimeout(() => lmap.invalidateSize(), 50);
   }
@@ -870,7 +892,11 @@
   }
 
   function closeMap(ok) {
-    if (ok && pick) setLocation({ lat: pick.lat, lon: pick.lon, acc: null, source: "map" });
+    if (ok && pick) {
+      if (mapCtx) mapCtx.onPick(pick.lat, pick.lon);
+      else setLocation({ lat: pick.lat, lon: pick.lon, acc: null, source: "map" });
+    }
+    mapCtx = null;
     $("#mapModal").classList.add("hidden");
   }
 
@@ -916,7 +942,16 @@
     if (r.error) { msg.className = "msg err"; msg.textContent = r.error; return; }
     if (state.editing) return saveEdit(r.data);
 
+    const ctx = state.tripCtx;
+    let guest = null;
+    if (ctx && ctx.guests) {
+      guest = $("#guestSel").value;
+      if (!guest) { msg.className = "msg err"; msg.textContent = "Válaszd ki, melyik vendég fogta a halat."; return; }
+    }
+    const backToTrip = ctx ? ctx.tripId : null;
     const item = Object.assign({
+      guest_name: guest,
+      trip_link: ctx ? ctx.tripId : null,
       client_id: uuid(),
       user_id: state.uid,
       photos: state.photos.map((p) => ({ blob: p.blob })),
@@ -934,6 +969,7 @@
       toast(navigator.onLine ? "Mentve, feltöltés folyamatban…" : "Mentve a telefonra. A kapcsolat helyreállása után feltöltődik.");
       resetForm();
       syncOutbox();
+      if (backToTrip && trips) { showTab("tabTrips"); trips.open(backToTrip, "catches"); }
       openShare(Object.assign({ _pending: true }, item), true);
     } catch (e) {
       msg.className = "msg err";
@@ -990,10 +1026,32 @@
     $("#btnSave").textContent = "Módosítás mentése";
     f.classList.add("editing");
     const info = $("#editInfo");
-    info.textContent = `Rögzítette: ${nameOf(c.user_id)}` + (c.updated_at ? ` · utoljára módosítva: ${dtFmt(c.updated_at)}` : "");
+    info.textContent = (c.guest_name ? `Vendég fogása: ${c.guest_name} (versenyen kívül) · ` : "") +
+      `Rögzítette: ${nameOf(c.user_id)}` + (c.updated_at ? ` · utoljára módosítva: ${dtFmt(c.updated_at)}` : "");
     info.classList.remove("hidden");
     checkLateTime();
     $("#lateWarn").classList.add("hidden");
+    showTab("tabNew");
+  }
+
+  // Fogás rögzítése egy túrából (saját vagy vendég fogása)
+  function startCatchForTrip(t, guests) {
+    resetForm(true);
+    const f = $("#catchForm");
+    f.water.value = t.water || "";
+    const now = Date.now(), s = new Date(t.start_at).getTime(), e = new Date(t.end_at).getTime();
+    if (now < s || now > e) setCatchTime(new Date(s));
+    if (!isRecentTime() && t.lat != null) setLocation({ lat: Number(t.lat), lon: Number(t.lon), acc: null, source: "list" });
+    state.tripCtx = { tripId: t.id, guests: guests && guests.length ? guests : null };
+    $("#tripCtxTitle").textContent = `⚑ ${t.title}`;
+    $("#guestField").classList.toggle("hidden", !state.tripCtx.guests);
+    $("#guestSel").innerHTML = state.tripCtx.guests
+      ? `<option value="">— válaszd ki —</option>` + guests.map((g) => `<option value="${esc(g)}">${esc(g)}</option>`).join("") : "";
+    if (state.tripCtx.guests && guests.length === 1) $("#guestSel").value = guests[0];
+    $("#tripCtxHint").textContent = state.tripCtx.guests
+      ? "Vendégfogás: versenyen kívüli, csak a túranaplóban jelenik meg."
+      : (now < s || now > e ? "Az időpontot a túra kezdésére állítottam – írd át a fogás valódi idejére." : "A fogás ehhez a túrához kerül.");
+    $("#tripCtx").classList.remove("hidden");
     showTab("tabNew");
   }
 
@@ -1284,10 +1342,17 @@
           photos: paths.length ? paths : null,
           weather: item.weather
         };
+        if (item.guest_name) row.guest_name = item.guest_name;
         const doUpsert = () => state.sb.from("catches").upsert(row, { onConflict: "client_id", ignoreDuplicates: true });
         let { error } = await doUpsert();
         if (missingCol(error, "photos")) { delete row.photos; ({ error } = await doUpsert()); }
         if (error) throw error;
+        // Túrából rögzített fogás: kézi hozzárendelés is (ha a vízterület neve eltérne)
+        if (item.trip_link) {
+          const lr = await state.sb.from("trip_catch_links")
+            .upsert({ trip_id: item.trip_link, client_id: item.client_id, included: true }, { onConflict: "trip_id,client_id" });
+          if (lr.error) console.warn("Túra-hozzárendelés:", lr.error);
+        }
         notifyNewCatch(item.client_id);
 
         await idb.del("outbox", item.client_id);
@@ -1309,16 +1374,23 @@
   // ------------------------------------------------------------------
   // Napló
   // ------------------------------------------------------------------
-  function allEntries() {
+  // Minden fogás, a vendégek (versenyen kívüli) fogásaival együtt – a túranaplóhoz
+  function everyEntry() {
     const pending = state.outbox
       .filter((x) => x.user_id === state.uid)
       .map((x) => Object.assign({}, x, { _pending: true }));
     const synced = state.catches.filter((c) => !pending.some((p) => p.client_id === c.client_id));
     return pending.concat(synced).sort((a, b) => (a.caught_at < b.caught_at ? 1 : -1));
   }
+  // A napló, a galéria, az összesítők és az export: vendégfogások nélkül
+  function allEntries() {
+    return everyEntry().filter((c) => !c.guest_name);
+  }
 
   const nameOf = (uid) => (state.profiles[uid] && state.profiles[uid].display_name) ||
     (uid === state.uid && state.me ? state.me.display_name : "Ismeretlen");
+  // A fogó neve: tag vagy vendég
+  const anglerOf = (c) => (c.guest_name ? `${c.guest_name} (vendég)` : nameOf(c.user_id));
 
   function fillSelect(sel, values, allLabel, keep = true) {
     const cur = sel.value;
@@ -1400,7 +1472,8 @@
   function showViewer() {
     const n = viewer.urls.length;
     $("#photoModalImg").src = viewer.urls[viewer.i];
-    $("#viewerCaption").textContent = viewer.caption + (n > 1 ? `  (${viewer.i + 1}/${n})` : "");
+    const cap = Array.isArray(viewer.caption) ? viewer.caption[viewer.i] || "" : viewer.caption;
+    $("#viewerCaption").textContent = cap + (n > 1 ? `  (${viewer.i + 1}/${n})` : "");
     $("#viewerPrev").classList.toggle("hidden", n < 2);
     $("#viewerNext").classList.toggle("hidden", n < 2);
   }
@@ -1412,7 +1485,7 @@
   }
   function captionOf(c) {
     const w = c.weight_kg != null ? ` – ${numFmt(c.weight_kg)} kg` : "";
-    return `${c.species}${w} · ${nameOf(c.user_id)} · ${c.water} · ${dtFmt(c.caught_at)}`;
+    return `${c.species}${w} · ${anglerOf(c)} · ${c.water} · ${dtFmt(c.caught_at)}`;
   }
 
   // Napló nézet: "detail" (részletes kártyák) vagy "compact" (egy sor egy fogás)
@@ -1435,9 +1508,11 @@
     const tags = [
       c._pending ? `<span class="tag pending">Feltöltésre vár</span>` : "",
       c.released ? `<span class="tag">Visszaengedve</span>` : "",
-      c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : ""
+      c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : "",
+      c.guest_name ? `<span class="tag guest">Vendég – versenyen kívül</span>` : ""
     ].join("");
-    const meta = [nameOf(c.user_id), dtFmt(c.caught_at)].join(" · ");
+    const meta = [anglerOf(c), dtFmt(c.caught_at)].join(" · ");
+    const inTrips = trips && !c._pending ? trips.tripsOfCatch(c) : [];
     const where = [c.water, c.spot].filter(Boolean).join(" – ");
     const how = [c.bait, c.method].filter(Boolean).join(" · ");
     const own = c.user_id === state.uid;
@@ -1461,6 +1536,7 @@
           ${c.weather ? `<div class="catch-wx">🌤 ${esc(weatherLine(c.weather))}</div>` : ""}
           <div class="catch-wx">${mo.icon} ${esc(mo.name)} · megvilágítottság kb. ${mo.illum_pct}%</div>
           <div class="catch-wx">🎉 Névnap: ${esc(nameDayText(new Date(c.caught_at)))}</div>
+          ${inTrips.length ? `<div class="catch-wx">⚑ Túra: ${inTrips.map((t) => `<button type="button" class="link inline" data-trip-open="${esc(t.id)}">${esc(t.title)}</button>`).join(", ")}</div>` : ""}
           <div style="margin-top:4px">${tags}</div>
           <div class="catch-actions">
             ${map}
@@ -1485,7 +1561,7 @@
           </span>
           <span class="crow-main">
             <span class="crow-species">${esc(c.species)}${c.released ? ` <span class="crow-tag">vissza</span>` : ""}${c._pending ? ` <span class="crow-tag pending">vár</span>` : ""}</span>
-            <span class="crow-sub">${esc(nameOf(c.user_id))} · ${esc(c.water)}</span>
+            <span class="crow-sub">${esc(anglerOf(c))} · ${esc(c.water)}</span>
           </span>
           <span class="crow-right">
             <span class="crow-kg">${c.weight_kg != null ? esc(numFmt(c.weight_kg)) + " kg" : "–"}</span>
@@ -1527,7 +1603,7 @@
     const btn = wrap.querySelector(".crow");
     const open = det.classList.contains("hidden");
     if (open) {
-      const c = allEntries().find((x) => x.client_id === id);
+      const c = everyEntry().find((x) => x.client_id === id);
       if (!c) return;
       det.innerHTML = cardHtml(c, { inner: true });
       loadThumbs(det, [c]);
@@ -1553,6 +1629,14 @@
       b.classList.toggle("active", on);
       b.setAttribute("aria-pressed", on ? "true" : "false");
     });
+
+    // Rekordlisták nézet: saját szűrőkkel
+    const rec = view === "records" && !!records;
+    $("#stdFilters").classList.toggle("hidden", rec);
+    $("#btnExport").classList.toggle("hidden", rec);
+    $("#logList").classList.toggle("hidden", rec);
+    $("#recOut").classList.toggle("hidden", !rec);
+    if (rec) { records.render(); return; }
 
     const list = filteredEntries();
     $("#logCount").textContent = `${list.length} fogás`;
@@ -1629,7 +1713,7 @@
     const size = [c.weight_kg != null ? `${numFmt(c.weight_kg)} kg` : "", c.length_cm != null ? `${numFmt(c.length_cm, 1)} cm` : ""].filter(Boolean).join(", ");
     const mo = moonInfo(new Date(c.caught_at));
     const lines = [
-      `🎣 ${nameOf(c.user_id)}: ${c.species}${size ? " – " + size : ""}`,
+      `🎣 ${anglerOf(c)}: ${c.species}${size ? " – " + size : ""}`,
       `📍 ${[c.water, c.spot].filter(Boolean).join(" – ")}`,
       `🕒 ${dtFmt(c.caught_at)}`
     ];
@@ -1637,6 +1721,7 @@
     if (c.weather) lines.push(`🌤 ${weatherLine(c.weather)}`);
     lines.push(`${mo.icon} ${mo.name}`);
     if (c.released) lines.push("↩️ Visszaengedve");
+    if (c.guest_name) lines.push(`👤 Vendégfogás (versenyen kívül), rögzítette: ${nameOf(c.user_id)}`);
     if (c.note) lines.push(`💬 ${c.note}`);
     lines.push("", `${CFG.CLUB_NAME || "Horgásznapló"}: ${APP_URL}`);
     return lines.join("\n");
@@ -1792,6 +1877,7 @@
 
   // Értesítésre koppintva: a fogás megnyitása a naplóban
   function openCatchFromHash() {
+    if (trips && trips.openFromHash()) return;
     const m = location.hash.match(/^#fogas-([0-9a-f-]{8,})$/i);
     if (!m) return;
     history.replaceState(null, "", location.pathname + location.search);
@@ -1829,6 +1915,7 @@
       }
       updateNet();
       renderLog();
+      if (trips && !$("#tabTrips").classList.contains("hidden")) trips.render();
       toast("Törölve.");
     } catch (e) {
       toast("A törlés nem sikerült: " + errText(e));
@@ -2047,6 +2134,11 @@
     $("#catchTime").addEventListener("blur", () => syncCatchTime(false));
     $$(".chip[data-shift]").forEach((b) => b.addEventListener("click", () => shiftCatchTime(b.dataset.shift)));
     $("#btnCancelEdit").addEventListener("click", cancelEdit);
+    $("#btnTripCtxCancel").addEventListener("click", () => {
+      const id = state.tripCtx && state.tripCtx.tripId;
+      resetForm();
+      if (id && trips) { showTab("tabTrips"); trips.open(id, "catches"); }
+    });
     $("#btnForgot").addEventListener("click", forgotPassword);
     $("#newPassForm").addEventListener("submit", onNewPassword);
     $$("#bottomNav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
@@ -2077,7 +2169,7 @@
       const lv = e.target.closest("#logViewSeg [data-view]");
       if (lv) setLogView(lv.dataset.view);
       const sh = e.target.closest(".btn-share");
-      if (sh) { const c = allEntries().find((x) => x.client_id === sh.dataset.id); if (c) openShare(c, false); }
+      if (sh) { const c = everyEntry().find((x) => x.client_id === sh.dataset.id); if (c) openShare(c, false); }
       const mem = e.target.closest("[data-member]");
       if (mem) setApproval(mem.dataset.member, mem.dataset.ok === "1");
     });
@@ -2109,7 +2201,7 @@
     try { if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } } catch (_) {}
     location.replace(location.pathname + "?v=" + Date.now() + location.hash);
   }
-  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid")) {
+  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid") || !document.getElementById("tabTrips") || !document.getElementById("recOut")) {
     reloadFresh();
     return;
   }

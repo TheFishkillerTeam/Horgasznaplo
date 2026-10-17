@@ -116,6 +116,14 @@
             <button type="button" class="btn small hidden" id="btnCancelEdit">Mégse</button>
           </div>
           <p id="editInfo" class="hint hidden"></p>
+          <div id="tripCtx" class="trip-ctx hidden">
+            <div class="trip-ctx-head"><strong id="tripCtxTitle"></strong>
+              <button type="button" class="btn small" id="btnTripCtxCancel">Mégse</button></div>
+            <label class="field hidden" id="guestField">Ki fogta? (vendég) *
+              <select id="guestSel"></select>
+            </label>
+            <p class="hint" id="tripCtxHint"></p>
+          </div>
 
           <div id="photoGrid" class="photo-grid" aria-live="polite"></div>
           <div class="photo-actions">
@@ -228,6 +236,7 @@
           </div>
         </div>
         <div class="filters card">
+          <div id="stdFilters">
           <div class="row2">
             <select id="fYear" aria-label="Év"></select>
             <select id="fUser" aria-label="Horgász"></select>
@@ -236,16 +245,24 @@
             <select id="fWater" aria-label="Vízterület"></select>
             <select id="fSpecies" aria-label="Halfaj"></select>
           </div>
+          </div>
           <div class="filters-foot">
             <span id="logCount" class="hint"></span>
             <div class="seg2" id="logViewSeg" role="group" aria-label="Napló nézet">
               <button type="button" data-view="detail">Részletes</button>
               <button type="button" data-view="compact">Tömör</button>
+              <button type="button" data-view="records">Rekordok</button>
             </div>
           </div>
           <button type="button" class="btn small block-sm" id="btnExport">Excel-export (CSV)</button>
         </div>
         <div id="logList"></div>
+        <div id="recOut" class="hidden"></div>
+      </div>
+
+      <!-- TÚRÁK (Horgásztúra napló) -->
+      <div id="tabTrips" class="tab hidden">
+        <div id="tripsOut"></div>
       </div>
 
       <!-- GALÉRIA -->
@@ -292,6 +309,7 @@
   <nav id="bottomNav" class="bottomnav hidden">
     <button type="button" data-tab="tabNew" class="active"><span>＋</span>Új fogás</button>
     <button type="button" data-tab="tabLog"><span>☰</span>Napló</button>
+    <button type="button" data-tab="tabTrips"><span>⚑</span>Túrák</button>
     <button type="button" data-tab="tabGallery"><span>▦</span>Galéria</button>
     <button type="button" data-tab="tabStats"><span>▤</span>Összesítők</button>
   </nav>
@@ -300,7 +318,7 @@
 
   <div id="mapModal" class="map-modal hidden" role="dialog" aria-label="Fogás helyének kijelölése">
     <div class="map-head">
-      <strong>Koppints a fogás helyére</strong>
+      <strong id="mapTitle">Koppints a fogás helyére</strong>
       <button type="button" class="btn small" id="btnMapClose">Mégse</button>
     </div>
     <div id="mapCanvas"></div>
@@ -319,6 +337,15 @@
     <img id="photoModalImg" alt="Fogás fotója">
     <button type="button" class="viewer-nav next" id="viewerNext" aria-label="Következő">›</button>
     <div class="viewer-caption" id="viewerCaption"></div>
+  </div>
+
+  <div id="pickSheet" class="sheet-wrap hidden" role="dialog" aria-label="Szűrő">
+    <div class="sheet">
+      <div class="form-head"><h3 id="pickTitle">Szűrő</h3><button type="button" class="btn small" id="btnPickNone">Mind törlése</button></div>
+      <div id="pickQuick" class="chips"></div>
+      <div id="pickList" class="pick-checks"></div>
+      <button type="button" class="btn primary block" id="btnPickOk">Kész</button>
+    </div>
   </div>
 
   <div id="shareSheet" class="sheet-wrap hidden" role="dialog" aria-label="Megosztás">
@@ -340,6 +367,8 @@
   <script src="config.js"></script>
   <script src="supabase.js"></script>
   <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="trips.js"></script>
+  <script src="records.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

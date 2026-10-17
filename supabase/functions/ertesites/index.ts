@@ -1,6 +1,6 @@
 // =====================================================================
 // TFT Horgásznapló – „ertesites” Edge Function
-// Push-értesítés küldése új fogásról a többi tagnak.
+// Push-értesítés a többi tagnak: új fogásról és új (tervezett) túráról.
 //
 // Telepítés: Supabase → Edge Functions → Deploy a new function → Via Editor
 // A függvény neve legyen pontosan: ertesites
@@ -220,7 +220,7 @@ Deno.serve(async (req) => {
         .update({ notified_at: new Date().toISOString() })
         .eq("client_id", body.client_id).eq("user_id", uid).is("notified_at", null)
         .gte("created_at", new Date(Date.now() - 3 * 86400000).toISOString())
-        .select("client_id, user_id, species, weight_kg, length_cm, water, caught_at, photo_path")
+        .select("*")
         .maybeSingle();
       if (!c) return json({ skipped: true });
 
@@ -235,11 +235,38 @@ Deno.serve(async (req) => {
         image = su?.signedUrl;
       }
       const msg = {
-        title: `🎣 ${me.display_name}: ${c.species}${size ? " – " + size : ""}`,
-        body: `${c.water} · ${time}`,
+        title: c.guest_name
+          ? `🎣 ${c.guest_name} (vendég): ${c.species}${size ? " – " + size : ""}`
+          : `🎣 ${me.display_name}: ${c.species}${size ? " – " + size : ""}`,
+        body: `${c.water} · ${time}${c.guest_name ? ` · rögzítette: ${me.display_name}` : ""}`,
         url: (body.url || "./") + "#fogas-" + c.client_id,
         image,
         tag: "fogas-" + c.client_id
+      };
+      const { data: subs } = await admin.from("push_subscriptions").select("id, endpoint, p256dh, auth").neq("user_id", uid);
+      const r = await sendToMany(subs || [], msg);
+      return json({ sent: r });
+    }
+
+    if (action === "new_trip") {
+      if (!body.trip_id) return json({ error: "Hiányzó azonosító." }, 400);
+      // Csak egyszer, csak a létrehozó kérésére, csak friss és még nem lezárult túránál
+      const { data: t } = await admin.from("trips")
+        .update({ notified_at: new Date().toISOString() })
+        .eq("id", body.trip_id).eq("created_by", uid).is("notified_at", null)
+        .gte("created_at", new Date(Date.now() - 3 * 86400000).toISOString())
+        .gte("end_at", new Date().toISOString())
+        .select("id, title, water, start_at, end_at")
+        .maybeSingle();
+      if (!t) return json({ skipped: true });
+      const when = new Date(t.start_at).toLocaleString("hu-HU", {
+        timeZone: "Europe/Budapest", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit"
+      });
+      const msg = {
+        title: `🧭 Új túra: ${t.title}`,
+        body: `${t.water} · ${when} · kiírta: ${me.display_name}. Jössz?`,
+        url: (body.url || "./") + "#tura-" + t.id,
+        tag: "tura-" + t.id
       };
       const { data: subs } = await admin.from("push_subscriptions").select("id, endpoint, p256dh, auth").neq("user_id", uid);
       const r = await sendToMany(subs || [], msg);
