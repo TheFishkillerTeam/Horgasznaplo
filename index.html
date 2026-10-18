@@ -19,11 +19,12 @@
   <header class="topbar">
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="32" height="32">
-      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small></span>
+      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v5.0</small></span>
     </div>
     <div class="topbar-right">
       <span id="netBadge" class="badge" title="Kapcsolat állapota">—</span>
       <button id="btnSync" class="badge badge-btn hidden" type="button" title="Szinkronizálás most"></button>
+      <button id="btnHome" class="icon-btn hidden" type="button" aria-label="Kezdőlap" title="Kezdőlap">⌂</button>
       <button id="btnMenu" class="icon-btn hidden" type="button" aria-label="Menü">☰</button>
     </div>
   </header>
@@ -108,8 +109,13 @@
 
     <!-- Fő nézetek -->
     <section id="viewMain" class="view hidden">
+      <!-- KEZDŐLAP (vezérlőfelület) -->
+      <div id="tabHome" class="tab">
+        <div id="homeOut"></div>
+      </div>
+
       <!-- ÚJ FOGÁS -->
-      <div id="tabNew" class="tab">
+      <div id="tabNew" class="tab hidden">
         <form id="catchForm" class="card" novalidate>
           <div class="form-head">
             <h2 id="formTitle">Új fogás</h2>
@@ -306,13 +312,6 @@
     </section>
   </main>
 
-  <nav id="bottomNav" class="bottomnav hidden">
-    <button type="button" data-tab="tabNew" class="active"><span>＋</span>Új fogás</button>
-    <button type="button" data-tab="tabLog"><span>☰</span>Napló</button>
-    <button type="button" data-tab="tabTrips"><span>⚑</span>Túrák</button>
-    <button type="button" data-tab="tabGallery"><span>▦</span>Galéria</button>
-    <button type="button" data-tab="tabStats"><span>▤</span>Összesítők</button>
-  </nav>
 
   <div id="toast" class="toast hidden" role="status"></div>
 

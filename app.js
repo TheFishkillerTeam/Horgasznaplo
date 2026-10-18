@@ -5,6 +5,8 @@
 (() => {
   "use strict";
 
+  // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
+  const APP_VERSION = "5.0";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -222,14 +224,26 @@
   function show(viewId) {
     $$(".view").forEach((v) => v.classList.toggle("hidden", v.id !== viewId));
     const main = viewId === "viewMain";
-    $("#bottomNav").classList.toggle("hidden", !main);
+    $("#btnHome").classList.toggle("hidden", !main || state.tab === "tabHome");
     $("#btnMenu").classList.toggle("hidden", !(main || viewId === "viewMembers" || viewId === "viewPending"));
     $("#menuPanel").classList.add("hidden");
   }
 
-  function showTab(tabId) {
+  // Nézetváltás. A kezdőlap a gyökér: onnan nyílik minden fül, a telefon „Vissza” gombja oda tér vissza.
+  function showTab(tabId, opts) {
+    const prev = state.tab;
+    state.tab = tabId;
     $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== tabId));
-    $$("#bottomNav button").forEach((b) => b.classList.toggle("active", b.dataset.tab === tabId));
+    $("#btnHome").classList.toggle("hidden", tabId === "tabHome" || $("#viewMain").classList.contains("hidden"));
+    document.documentElement.style.setProperty("--top-h", $(".topbar").offsetHeight + "px");
+    if (!(opts && opts.pop)) {
+      try {
+        if (tabId === "tabHome") history.replaceState({ tab: "tabHome" }, "");
+        else if (!prev || prev === "tabHome") history.pushState({ tab: tabId }, "");
+        else history.replaceState({ tab: tabId }, "");
+      } catch (_) { /* beágyazott nézetben nem elérhető */ }
+    }
+    if (tabId === "tabHome") renderHome();
     if (tabId === "tabLog") { renderLog(); updatePushHint(); }
     if (tabId === "tabGallery") renderGallery();
     if (tabId === "tabStats") renderStats();
@@ -254,6 +268,10 @@
   // ------------------------------------------------------------------
   async function start() {
     $("#clubName").textContent = CFG.CLUB_NAME || "Horgásznapló";
+    $("#appVer").textContent = "v" + APP_VERSION;
+    // A fejléc magassága (a ragadós elemek és a menü helyéhez)
+    const topH = () => document.documentElement.style.setProperty("--top-h", $(".topbar").offsetHeight + "px");
+    topH(); window.addEventListener("resize", topH); setTimeout(topH, 300);
     document.title = (CFG.CLUB_NAME ? CFG.CLUB_NAME + " – " : "") + "Horgásznapló";
 
     if ("serviceWorker" in navigator) {
@@ -265,7 +283,7 @@
       trips = window.TFTTrips({
         state, $, esc, numFmt, dtFmt, tzParts, toast, errText, idb, uuid, TZ, CFG, APP_URL,
         nameOf, anglerOf, everyEntry, cardHtml, loadThumbs, photoCount, catchPhotoPaths, captionOf,
-        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip
+        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate
       });
     }
     if (typeof window.TFTRecords === "function") {
@@ -381,7 +399,9 @@
     show("viewMain");
     resetForm();
     fillDatalists();
-    showTab("tabNew");
+    try { history.replaceState({ tab: "tabHome" }, ""); } catch (_) { /* nem elérhető */ }
+    state.tab = null;
+    showTab("tabHome");
     updatePushMenu();
     openCatchFromHash();
   }
@@ -411,10 +431,12 @@
       if (!$("#tabLog").classList.contains("hidden")) renderLog();
       if (!$("#tabStats").classList.contains("hidden")) renderStats();
       if (!$("#tabGallery").classList.contains("hidden")) renderGallery();
+      if (!$("#tabHome").classList.contains("hidden")) renderHome();
     } catch (e) {
       console.warn("Frissítés sikertelen:", e);
     }
     if (trips) await trips.refresh();
+    if (state.tab === "tabHome") renderHome();
   }
 
   // ------------------------------------------------------------------
@@ -1032,6 +1054,107 @@
     checkLateTime();
     $("#lateWarn").classList.add("hidden");
     showTab("tabNew");
+  }
+
+  // ------------------------------------------------------------------
+  // Kezdőlap (vezérlőfelület)
+  // ------------------------------------------------------------------
+  function renderHome() {
+    const box = $("#homeOut");
+    if (!box || !state.me) return;
+    const all = allEntries();
+    const nowY = tzParts(new Date()).y;
+    const thisYear = all.filter((c) => yearOf(c.caught_at) === nowY).length;
+    const withPh = all.filter((c) => photoCount(c) > 0).length;
+    const best = all.reduce((b, c) => (c.weight_kg != null && (!b || Number(c.weight_kg) > Number(b.weight_kg)) ? c : b), null);
+    const mine = state.outbox.filter((x) => x.user_id === state.uid).length;
+    const ti = trips ? trips.homeInfo() : { active: [], planned: [], total: 0, suggest: 0 };
+    const last = all[0];
+    const first = (state.me.display_name || "").split(" ").slice(-1)[0];
+    const tile = (go, icon, title, sub) => `<button type="button" class="home-tile" data-go="${go}">
+        <span class="ht-icon" aria-hidden="true">${icon}</span><span class="ht-title">${title}</span><span class="ht-sub">${sub}</span></button>`;
+    const tripSub = ti.active.length ? `${ti.active.length} most zajlik` : ti.planned.length ? `${ti.planned.length} tervezett` : `${ti.total} túra`;
+    box.innerHTML = `
+      <div class="home-hello">Szia${first ? ", " + esc(first) : ""}!</div>
+      <button type="button" class="home-new" data-go="tabNew"><span aria-hidden="true">＋</span> Új fogás rögzítése</button>
+      ${mine ? `<button type="button" class="card home-alert" data-home-sync>⟳ ${mine} fogás feltöltésre vár – koppints a küldéshez</button>` : ""}
+      <div class="home-grid">
+        ${tile("tabLog", "☰", "Napló", `${all.length} fogás`)}
+        ${tile("records", "🏆", "Rekordok", best ? `${esc(best.species)} ${esc(numFmt(best.weight_kg))} kg` : "rangsorok")}
+        ${tile("tabTrips", "⚑", "Túrák", tripSub + (ti.suggest ? ` · ${ti.suggest} javaslat` : ""))}
+        ${tile("tabGallery", "▦", "Galéria", `${withPh} fotós fogás`)}
+        ${tile("tabStats", "▤", "Összesítők", `idén ${thisYear} fogás`)}
+        ${tile("menu", "⚙", "Beállítások", "értesítés, név, kilépés")}
+      </div>
+      ${ti.active.concat(ti.planned.slice(0, 1)).map((t) => `
+        <button type="button" class="card home-trip" data-trip-open="${esc(t.id)}">
+          <span class="ht-kicker">${t._status === "active" ? "Most zajlik" : "Következő túra"}</span>
+          <span class="ht-title">${esc(t.title)}</span>
+          <span class="ht-sub">${esc(t.water)} · ${esc(t._range)}${t._mine ? ` · Te: ${esc(t._mine)}` : t._status === "planned" ? " · még nem jelezted" : ""}</span>
+        </button>`).join("")}
+      ${last ? `<button type="button" class="card home-last" data-home-last="${esc(last.client_id)}">
+          <span class="ht-kicker">Legutóbbi fogás</span>
+          <span class="ht-title">${esc(last.species)}${last.weight_kg != null ? ` – ${esc(numFmt(last.weight_kg))} kg` : ""}</span>
+          <span class="ht-sub">${esc(nameOf(last.user_id))} · ${esc(last.water)} · ${esc(dtFmt(last.caught_at))}</span>
+        </button>` : ""}`;
+  }
+
+  function goHome() {
+    try {
+      if (history.state && history.state.tab && history.state.tab !== "tabHome") { history.back(); return; }
+    } catch (_) { /* nem elérhető */ }
+    showTab("tabHome");
+  }
+
+  function onHomeGo(go) {
+    if (go === "menu") { $("#menuPanel").classList.remove("hidden"); return; }
+    if (go === "records") { if (logView() !== "records") state.lastListView = logView(); state.logView = "records"; try { localStorage.setItem("logView", "records"); } catch (_) { /* nincs tároló */ } showTab("tabLog"); return; }
+    if (go === "tabLog" && logView() === "records") { state.logView = state.lastListView || "detail"; try { localStorage.setItem("logView", state.logView); } catch (_) { /* nincs tároló */ } }
+    showTab(go);
+  }
+
+  // ------------------------------------------------------------------
+  // A fotó készítésének ideje a JPEG EXIF adataiból (DateTimeOriginal)
+  // ------------------------------------------------------------------
+  async function exifDate(file) {
+    const buf = await file.slice(0, 256 * 1024).arrayBuffer();
+    const v = new DataView(buf);
+    if (v.byteLength < 4 || v.getUint16(0) !== 0xFFD8) return null;
+    let o = 2;
+    while (o + 10 < v.byteLength) {
+      const m = v.getUint16(o), len = v.getUint16(o + 2);
+      if (m === 0xFFE1 && v.getUint32(o + 4) === 0x45786966) return exifTiffDate(v, o + 10);
+      if ((m & 0xFF00) !== 0xFF00 || m === 0xFFDA) break;
+      o += 2 + len;
+    }
+    return null;
+  }
+  function exifTiffDate(v, t) {
+    const le = v.getUint16(t) === 0x4949;
+    const u16 = (p) => v.getUint16(p, le), u32 = (p) => v.getUint32(p, le);
+    const SIZE = [0, 1, 1, 2, 4, 8, 1, 1, 2, 4, 8, 4, 8];
+    const ifd = (off) => {
+      const out = {};
+      if (t + off + 2 > v.byteLength) return out;
+      const n = u16(t + off);
+      for (let i = 0; i < n; i++) {
+        const e = t + off + 2 + i * 12;
+        if (e + 12 > v.byteLength) break;
+        const type = u16(e + 2), cnt = u32(e + 4);
+        out[u16(e)] = { cnt, at: cnt * (SIZE[type] || 1) > 4 ? t + u32(e + 8) : e + 8 };
+      }
+      return out;
+    };
+    const str = (en) => { let r = ""; for (let i = 0; i < en.cnt - 1 && en.at + i < v.byteLength; i++) r += String.fromCharCode(v.getUint8(en.at + i)); return r; };
+    const i0 = ifd(u32(t + 4));
+    let raw = null;
+    if (i0[0x8769]) { const ex = ifd(u32(i0[0x8769].at)); const en = ex[0x9003] || ex[0x9004]; if (en) raw = str(en); }
+    if (!raw && i0[0x0132]) raw = str(i0[0x0132]);
+    const m = raw && raw.match(/^(\d{4}):(\d{2}):(\d{2})[ T](\d{2}):(\d{2}):(\d{2})/);
+    if (!m) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]); // a fényképezőgép helyi ideje
+    if (isNaN(d) || d.getFullYear() < 1995 || d.getTime() > Date.now() + 86400000) return null;
+    return d;
   }
 
   // Fogás rögzítése egy túrából (saját vagy vendég fogása)
@@ -1880,7 +2003,7 @@
     if (trips && trips.openFromHash()) return;
     const m = location.hash.match(/^#fogas-([0-9a-f-]{8,})$/i);
     if (!m) return;
-    history.replaceState(null, "", location.pathname + location.search);
+    history.replaceState(history.state, "", location.pathname + location.search);
     state.highlight = { id: m[1], until: Date.now() + 5000, scrolled: false };
     showTab("tabLog");
     setTimeout(() => { state.highlight = null; $$(".catch.highlight").forEach((el) => el.classList.remove("highlight")); }, 5000);
@@ -2141,7 +2264,13 @@
     });
     $("#btnForgot").addEventListener("click", forgotPassword);
     $("#newPassForm").addEventListener("submit", onNewPassword);
-    $$("#bottomNav button").forEach((b) => b.addEventListener("click", () => showTab(b.dataset.tab)));
+    $("#btnHome").addEventListener("click", goHome);
+    $(".brand").addEventListener("click", () => { if (state.me && state.me.approved && !$("#viewMain").classList.contains("hidden")) goHome(); });
+    window.addEventListener("popstate", (e) => {
+      if (!state.me || $("#viewMain").classList.contains("hidden")) return;
+      $("#photoModal").classList.add("hidden"); $("#shareSheet").classList.add("hidden"); $("#mapModal").classList.add("hidden");
+      showTab((e.state && e.state.tab) || "tabHome", { pop: true });
+    });
     ["#fYear", "#fUser", "#fWater", "#fSpecies"].forEach((s) => $(s).addEventListener("change", renderLog));
     ["#sYear", "#sMode"].forEach((s) => $(s).addEventListener("change", renderStats));
     $("#btnExport").addEventListener("click", exportCsv);
@@ -2150,7 +2279,7 @@
     $("#btnMembersBack").addEventListener("click", () => { show("viewMain"); });
     $("#btnMenu").addEventListener("click", (e) => { e.stopPropagation(); $("#menuPanel").classList.toggle("hidden"); });
     document.addEventListener("click", (e) => {
-      if (!e.target.closest("#menuPanel") && !e.target.closest("#btnMenu")) $("#menuPanel").classList.add("hidden");
+      if (!e.target.closest("#menuPanel") && !e.target.closest("#btnMenu") && !e.target.closest('[data-go="menu"]')) $("#menuPanel").classList.add("hidden");
       const act = e.target.closest("[data-action]");
       if (act) {
         const a = act.dataset.action;
@@ -2160,6 +2289,11 @@
         if (a === "push") { $("#menuPanel").classList.add("hidden"); currentPushSub().then((s) => (s ? disablePush() : enablePush())); }
         if (a === "pushtest") { $("#menuPanel").classList.add("hidden"); testPush(); }
       }
+      const hg = e.target.closest("[data-go]");
+      if (hg) { e.stopPropagation(); onHomeGo(hg.dataset.go); return; }
+      if (e.target.closest("[data-home-sync]")) syncOutbox();
+      const hl = e.target.closest("[data-home-last]");
+      if (hl) { state.highlight = { id: hl.dataset.homeLast, until: Date.now() + 5000, scrolled: false }; onHomeGo("tabLog"); }
       const del = e.target.closest(".btn-del");
       if (del) deleteEntry(del.dataset.id);
       const ed = e.target.closest(".btn-edit");
@@ -2201,7 +2335,7 @@
     try { if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } } catch (_) {}
     location.replace(location.pathname + "?v=" + Date.now() + location.hash);
   }
-  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid") || !document.getElementById("tabTrips") || !document.getElementById("recOut")) {
+  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid") || !document.getElementById("tabTrips") || !document.getElementById("recOut") || !document.getElementById("tabHome")) {
     reloadFresh();
     return;
   }

@@ -19,6 +19,8 @@ window.TFTTrips = function (A) {
     loc: null,           // űrlap: a túra helye { lat, lon }
     queue: [],           // album: feltöltésre váró képek { blob, url }
     pickMode: false,     // fogások: kézi hozzáadás listája nyitva
+    q: "",               // keresőszöveg a túralistában
+    albumCatch: null,    // album alsó szintje: a megnyitott fogás
     catchSort: "time",   // fogások: időrend | rangsor (súly szerint)
     editPost: null,
     wx: {},              // időjárás gyorsítótár
@@ -164,6 +166,16 @@ window.TFTTrips = function (A) {
       <p class="hint">A túranaplóhoz az adminisztrátornak le kell futtatnia a <code>supabase_frissites_v4.sql</code> fájlt a Supabase SQL Editorban (útmutató 14. fejezet).</p></div>`;
   }
 
+  // A túra borítóképe: a kiválasztott, különben a legkorábbi túrakép, különben a legnagyobb hal listaképe
+  function coverOf(t) {
+    if (t.cover_path) return t.cover_path;
+    const ph = albumPhotos(t)[0];
+    if (ph) return ph.path;
+    const withPh = catchesOf(t).filter((c) => !c._pending && A.coverPath(c));
+    withPh.sort((a, b) => (Number(b.weight_kg) || 0) - (Number(a.weight_kg) || 0));
+    return withPh.length ? A.coverPath(withPh[0]) : null;
+  }
+
   function tripCardHtml(t) {
     const s = status(t);
     const cs = catchesOf(t);
@@ -174,19 +186,53 @@ window.TFTTrips = function (A) {
     const nPh = T.photos.filter((p) => p.trip_id === t.id).length + cs.reduce((n, c) => n + A.photoCount(c), 0);
     const nPo = T.posts.filter((p) => p.trip_id === t.id).length;
     const sum = scored.reduce((n, c) => n + (c.weight_kg != null ? Number(c.weight_kg) : 0), 0);
+    const cov = coverOf(t);
     return `
-      <button type="button" class="card trip-card" data-trip-open="${esc(t.id)}">
-        <div class="trip-card-head"><span class="trip-title">${esc(t.title)}</span>${statusBadge(s)}</div>
-        <div class="trip-sub">${esc(t.water)} · ${esc(rangeText(t))}</div>
-        <div class="trip-stats">
-          <span>🐟 ${scored.length}${sum ? ` · ${esc(kg(sum))}` : ""}</span>
-          <span>👥 ${yes}</span><span>📷 ${nPh}</span><span>📝 ${nPo}</span>
-          ${s !== "past" ? `<span class="trip-me">${mine ? "Te: " + esc(RSVP[mine.rsvp]) : "Még nem jelezted"}</span>` : ""}
-        </div>
+      <button type="button" class="card trip-card${cov ? " has-cover" : ""}" data-trip-open="${esc(t.id)}">
+        <span class="trip-cover">${cov ? `<img alt="" loading="lazy" data-cover="${esc(cov)}">` : `<span class="trip-cover-ph">⚑</span>`}</span>
+        <span class="trip-card-body">
+          <span class="trip-card-head"><span class="trip-title">${esc(t.title)}</span>${statusBadge(s)}</span>
+          <span class="trip-sub">${esc(t.water)} · ${esc(rangeText(t))}</span>
+          <span class="trip-stats">
+            <span>🐟 ${scored.length}${sum ? ` · ${esc(kg(sum))}` : ""}</span>
+            <span>👥 ${yes}</span><span>📷 ${nPh}</span><span>📝 ${nPo}</span>
+            ${s !== "past" ? `<span class="trip-me">${mine ? "Te: " + esc(RSVP[mine.rsvp]) : "Még nem jelezted"}</span>` : ""}
+          </span>
+        </span>
       </button>`;
   }
 
+  // Borítóképek betöltése (egy kötegben)
+  function loadCovers(root) {
+    const imgs = Array.from(root.querySelectorAll("img[data-cover]"));
+    if (!imgs.length) return;
+    A.signedUrlsFor(imgs.map((i) => i.dataset.cover)).then((urls) => {
+      imgs.forEach((i) => { const u = urls[i.dataset.cover]; if (u) i.src = u; else i.replaceWith(Object.assign(document.createElement("span"), { className: "trip-cover-ph", textContent: "⚑" })); });
+    });
+  }
+
   function renderList(box) {
+    box.innerHTML = `
+      ${T.missing ? missingHtml() : ""}
+      <div class="card trips-head">
+        <div class="trips-head-row">
+          <div><strong>Horgásztúra napló</strong>
+            <div class="hint">A túra ideje alatt, a túra vízterületén rögzített fogások automatikusan a túrához kerülnek.</div></div>
+          <button type="button" class="btn primary small" data-trip-new ${T.missing ? "disabled" : ""}>＋ Új túra</button>
+        </div>
+        <label class="search-box"><span aria-hidden="true">🔍</span>
+          <input type="search" id="tripSearch" placeholder="Keresés: leírás, beszámoló, képaláírás, vendég…" value="${esc(T.q || "")}" autocomplete="off" enterkeyhint="search">
+        </label>
+      </div>
+      <div id="tripListBody"></div>`;
+    renderListBody();
+  }
+
+  function renderListBody() {
+    const body = $("#tripListBody");
+    if (!body) return;
+    const q = (T.q || "").trim();
+    if (q.length >= 2) { body.innerHTML = searchHtml(q); loadCovers(body); return; }
     const now = Date.now();
     const groups = { active: [], planned: [], past: [] };
     T.trips.forEach((t) => groups[status(t, now)].push(t));
@@ -194,17 +240,130 @@ window.TFTTrips = function (A) {
     groups.active.sort((a, b) => ms(a.start_at) - ms(b.start_at));
     groups.past.sort((a, b) => ms(b.start_at) - ms(a.start_at));
     const sec = (title, list) => (list.length ? `<h3 class="sec-title">${title}</h3>${list.map(tripCardHtml).join("")}` : "");
-    box.innerHTML = `
-      ${T.missing ? missingHtml() : ""}
-      <div class="card trips-head">
-        <div><strong>Horgásztúra napló</strong>
-          <div class="hint">A túra ideje alatt, a túra vízterületén rögzített fogások automatikusan a túrához kerülnek.</div></div>
-        <button type="button" class="btn primary small" data-trip-new ${T.missing ? "disabled" : ""}>＋ Új túra</button>
-      </div>
+    body.innerHTML = `
+      ${suggestHtml()}
       ${sec("Most zajlik", groups.active)}
       ${sec("Tervezett", groups.planned)}
       ${sec("Korábbi túrák", groups.past)}
       ${T.trips.length ? "" : `<div class="card empty">Még nincs túra. Az „Új túra” gombbal kiírhatod az elsőt – a tervezett túráról a többiek értesítést kapnak.</div>`}`;
+    loadCovers(body);
+  }
+
+  // ---- Keresés a túrákban: ékezet- és kisbetű-független ----
+  // Egy karakter → egy karakter megfeleltetés, hogy a találat az eredeti szövegben kiemelhető legyen
+  const fold = (str) => Array.from(String(str || "").normalize("NFC")).map((ch) => (ch.normalize("NFD").replace(/[̀-ͯ]/g, "").toLowerCase().charAt(0) || ch)).join("");
+  function snippet(text, q) {
+    const src = Array.from(String(text || "").normalize("NFC"));
+    const f = fold(src.join("")), fq = fold(q);
+    const i = f.indexOf(fq);
+    if (i < 0) return null;
+    const a = Math.max(0, i - 40), b = Math.min(src.length, i + fq.length + 60);
+    return `${a > 0 ? "…" : ""}${esc(src.slice(a, i).join(""))}<mark>${esc(src.slice(i, i + fq.length).join(""))}</mark>${esc(src.slice(i + fq.length, b).join(""))}${b < src.length ? "…" : ""}`;
+  }
+  function searchTrip(t, q) {
+    const hits = [];
+    const add = (kind, text, sec, who) => { const sn = snippet(text, q); if (sn) hits.push({ kind, sn, sec, who }); };
+    add("Megnevezés", t.title, "overview"); add("Vízterület", t.water, "overview"); add("Leírás", t.note, "overview");
+    T.posts.filter((p) => p.trip_id === t.id).forEach((p) => add("Beszámoló", p.body, "posts", A.nameOf(p.user_id)));
+    T.photos.filter((p) => p.trip_id === t.id).forEach((p) => add("Képaláírás", p.memo, "album", A.nameOf(p.user_id)));
+    const guests = new Set();
+    T.people.filter((p) => p.trip_id === t.id && p.guest_name).forEach((p) => guests.add(p.guest_name));
+    catchesOf(t).forEach((c) => {
+      if (c.guest_name) guests.add(c.guest_name);
+      add("Fogás megjegyzése", c.note, "catches", A.anglerOf(c));
+    });
+    guests.forEach((g) => add("Vendég", g, "overview"));
+    return hits;
+  }
+  function searchHtml(q) {
+    const res = T.trips.map((t) => ({ t, hits: searchTrip(t, q) })).filter((r) => r.hits.length)
+      .sort((a, b) => ms(b.t.start_at) - ms(a.t.start_at));
+    if (!res.length) return `<div class="card empty">Nincs találat erre: „${esc(q)}”.</div>`;
+    return `<p class="hint sr-count">${res.length} túrában van találat.</p>` + res.map(({ t, hits }) => {
+      const cov = coverOf(t);
+      return `<div class="card sr-card">
+        <button type="button" class="sr-head" data-trip-open="${esc(t.id)}">
+          <span class="trip-cover small">${cov ? `<img alt="" loading="lazy" data-cover="${esc(cov)}">` : `<span class="trip-cover-ph">⚑</span>`}</span>
+          <span><span class="trip-title">${esc(t.title)}</span><span class="trip-sub">${esc(t.water)} · ${esc(rangeText(t))}</span></span>
+        </button>
+        ${hits.slice(0, 6).map((h) => `<button type="button" class="sr-hit" data-trip-open="${esc(t.id)}" data-open-sec="${h.sec}">
+          <small>${esc(h.kind)}${h.who ? " · " + esc(h.who) : ""}</small><span>${h.sn}</span></button>`).join("")}
+        ${hits.length > 6 ? `<p class="hint">+ ${hits.length - 6} további találat</p>` : ""}
+      </div>`;
+    }).join("");
+  }
+
+  // ---- Túrajavaslatok: túrához nem tartozó, egy vízen, egymást követő napokon született fogásokból ----
+  const SUGGEST_MIN_ANGLERS = 2;   // legalább ennyi különböző horgász, VAGY
+  const SUGGEST_MIN_CATCHES = 3;   // legalább ennyi fogás
+  const SUGGEST_DAYS_BACK = 90;    // ennél régebbi fogásokból nem javasol
+  const baseWater = (w) => String(w || "").split(/[,(]| - | – /)[0].trim();
+  const dayNo = (iso) => { const p = tzParts(new Date(iso)); return Date.UTC(Number(p.y), Number(p.m) - 1, Number(p.d)) / 86400000; };
+  const dismissed = () => { try { return JSON.parse(localStorage.getItem("tripSuggestHidden") || "[]"); } catch (_) { return []; } };
+  const MON = ["jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.", "aug.", "szept.", "okt.", "nov.", "dec."];
+
+  function suggestions() {
+    if (T.missing) return [];
+    const cut = Date.now() - SUGGEST_DAYS_BACK * 86400000;
+    const linked = new Set(T.links.map((l) => l.client_id));
+    const pool = A.everyEntry().filter((c) => !c._pending && !c.guest_name && ms(c.caught_at) >= cut &&
+      !linked.has(c.client_id) && baseWater(c.water) && !T.trips.some((t) => inTrip(t, c)));
+    const groups = new Map();
+    pool.forEach((c) => {
+      const k = normWater(baseWater(c.water));
+      if (!groups.has(k)) groups.set(k, []);
+      groups.get(k).push(c);
+    });
+    const hidden = new Set(dismissed());
+    const out = [];
+    groups.forEach((arr, k) => {
+      arr.sort((a, b) => (a.caught_at < b.caught_at ? -1 : 1));
+      let cl = [];
+      const flush = () => {
+        if (!cl.length) return;
+        const anglers = new Set(cl.map((c) => c.user_id)).size;
+        if (anglers >= SUGGEST_MIN_ANGLERS || cl.length >= SUGGEST_MIN_CATCHES) {
+          const first = cl[0], last = cl[cl.length - 1];
+          const id = `${k}|${dayNo(first.caught_at)}`;
+          if (!hidden.has(id)) {
+            const names = {};
+            cl.forEach((c) => { const b = baseWater(c.water); names[b] = (names[b] || 0) + 1; });
+            const water = Object.keys(names).sort((a, b) => names[b] - names[a] || a.length - b.length)[0];
+            const a = tzParts(new Date(first.caught_at)), b = tzParts(new Date(last.caught_at));
+            const when = a.y + a.m + a.d === b.y + b.m + b.d ? `${MON[Number(a.m) - 1]} ${Number(a.d)}.`
+              : a.m === b.m ? `${MON[Number(a.m) - 1]} ${Number(a.d)}–${Number(b.d)}.` : `${MON[Number(a.m) - 1]} ${Number(a.d)}. – ${MON[Number(b.m) - 1]} ${Number(b.d)}.`;
+            const geo = cl.find((c) => c.lat != null && c.lon != null);
+            out.push({ id, water, when, n: cl.length, anglers, last: ms(last.caught_at),
+              s: new Date(Number(a.y), Number(a.m) - 1, Number(a.d), 0, 0),
+              e: new Date(Number(b.y), Number(b.m) - 1, Number(b.d), 23, 59),
+              loc: geo ? { lat: Number(geo.lat), lon: Number(geo.lon) } : null,
+              title: `${water} – ${when}` });
+          }
+        }
+        cl = [];
+      };
+      arr.forEach((c) => {
+        if (cl.length && dayNo(c.caught_at) - dayNo(cl[cl.length - 1].caught_at) > 1) flush();
+        cl.push(c);
+      });
+      flush();
+    });
+    return out.sort((x, y) => y.last - x.last);
+  }
+
+  function suggestHtml() {
+    const sg = suggestions();
+    if (!sg.length) return "";
+    const shown = T.allSuggest ? sg : sg.slice(0, 3);
+    return `<h3 class="sec-title">Javasolt túrák</h3>
+      <div class="card suggest">
+        <p class="hint">Ezek a fogások még egyik túrához sem tartoznak. Ha közös horgászat volt, egy koppintással túrát készíthetsz belőlük.</p>
+        ${shown.map((x) => `<div class="sg-row"><div><b>${esc(x.when)}, ${esc(x.water)}</b>
+          <div class="hint">${x.n} fogás · ${x.anglers} horgász</div></div>
+          <div class="sg-btns"><button type="button" class="btn small primary" data-sg-make="${esc(x.id)}">Túra létrehozása</button>
+          <button type="button" class="link" data-sg-hide="${esc(x.id)}">Elvetés</button></div></div>`).join("")}
+        ${sg.length > 3 ? `<button type="button" class="link" data-sg-all>${T.allSuggest ? "Kevesebb" : `Mind a ${sg.length} javaslat`}</button>` : ""}
+      </div>`;
   }
 
   // ---- Túra űrlap (új / szerkesztés) ----
@@ -220,10 +379,11 @@ window.TFTTrips = function (A) {
     return d;
   }
 
-  function openForm(id) {
+  function openForm(id, prefill) {
     const t = id ? tripById(id) : null;
     T.view = "form"; T.editId = t ? t.id : null;
-    T.loc = t && t.lat != null ? { lat: Number(t.lat), lon: Number(t.lon) } : null;
+    T.prefill = t ? null : prefill || null;
+    T.loc = t && t.lat != null ? { lat: Number(t.lat), lon: Number(t.lon) } : (T.prefill && T.prefill.loc) || null;
     render();
     window.scrollTo(0, 0);
   }
@@ -231,7 +391,9 @@ window.TFTTrips = function (A) {
   function renderForm(box) {
     const t = T.editId ? tripById(T.editId) : null;
     let s, e;
+    const pf = T.prefill;
     if (t) { s = new Date(t.start_at); e = new Date(t.end_at); }
+    else if (pf) { s = pf.s; e = pf.e; }
     else {
       s = new Date(); s.setDate(s.getDate() + 1); s.setHours(6, 0, 0, 0);
       e = new Date(s); e.setHours(18, 0, 0, 0);
@@ -240,11 +402,12 @@ window.TFTTrips = function (A) {
       <form class="card" id="tripForm" novalidate>
         <div class="form-head"><h2>${t ? "Túra szerkesztése" : "Új túra"}</h2>
           <button type="button" class="btn small" data-trip-cancel>Mégse</button></div>
+        ${pf ? `<p class="msg ok">Javaslat alapján kitöltve: ${pf.n} fogás, ${pf.anglers} horgász. Írd át a nevet, ha szeretnéd, és ellenőrizd az időszakot.</p>` : ""}
         <label class="field">Megnevezés *
-          <input name="title" maxlength="80" required placeholder="pl. Őszi pontyozás a Zagyván" value="${esc(t ? t.title : "")}">
+          <input name="title" maxlength="80" required placeholder="pl. Őszi pontyozás a Zagyván" value="${esc(t ? t.title : pf ? pf.title : "")}">
         </label>
         <label class="field">Vízterület *
-          <input name="water" list="waterList" maxlength="80" required placeholder="pl. Zagyva" value="${esc(t ? t.water : "")}">
+          <input name="water" list="waterList" maxlength="80" required placeholder="pl. Zagyva" value="${esc(t ? t.water : pf ? pf.water : "")}">
         </label>
         <p class="hint">A túrához automatikusan azok a fogások kerülnek, amelyek az alábbi időszakban, ezen a vízterületen születtek. A „Zagyva” túrához a „Zagyva, jászberényi szakasz” fogás is odakerül.</p>
         <div class="field">Kezdés *
@@ -395,7 +558,7 @@ window.TFTTrips = function (A) {
         // A kiíró automatikusan résztvevő
         await state.sb.from("trip_people").insert({ trip_id: data.id, user_id: state.uid, rsvp: "yes" });
         if (ms(data.end_at) > Date.now()) A.callFn({ action: "new_trip", trip_id: data.id, url: A.APP_URL }).catch((x) => console.warn("Értesítés:", x));
-        T.view = "detail"; T.openId = data.id; T.sec = "overview";
+        T.view = "detail"; T.openId = data.id; T.sec = "overview"; T.prefill = null;
         toast(ms(data.end_at) > Date.now() ? "Túra létrehozva, a többiek értesítést kapnak." : "Túra létrehozva.");
       }
       await refresh();
@@ -426,7 +589,7 @@ window.TFTTrips = function (A) {
 
   // ---- Túra részletei ----
   function open(id, sec) {
-    T.view = "detail"; T.openId = id; T.sec = sec || "overview"; T.pickMode = false; T.editPost = null;
+    T.view = "detail"; T.openId = id; T.sec = sec || "overview"; T.pickMode = false; T.editPost = null; T.albumCatch = null;
     T.queue.forEach((q) => URL.revokeObjectURL(q.url)); T.queue = [];
     render();
     window.scrollTo(0, 0);
@@ -795,52 +958,129 @@ window.TFTTrips = function (A) {
     } catch (x) { toast(errText(x)); }
   }
 
-  // ---- Album ----
+  // ---- Album (két szint) ----
+  // Felső szint: a túrához feltöltött képek + a fogások csillagozott listaképei (🐟), időrendben.
+  // Alsó szint: egy fogás összes képe (a listaképre koppintva).
+  const photoTime = (p) => ms(p.taken_at || p.created_at);
+  const albumPhotos = (t) => T.photos.filter((p) => p.trip_id === t.id).sort((a, b) => photoTime(a) - photoTime(b));
+
+  function albumTop(t, cs) {
+    const items = albumPhotos(t).map((p) => ({ kind: "photo", p, path: p.path, time: photoTime(p),
+      caption: `${p.memo ? p.memo + " – " : ""}${A.nameOf(p.user_id)}, ${dtFmt(p.taken_at || p.created_at)}${p.taken_at ? "" : " (feltöltve)"}` }));
+    cs.filter((c) => !c._pending && A.coverPath(c)).forEach((c) => items.push({ kind: "catch", c, path: A.coverPath(c), time: ms(c.caught_at), n: A.photoCount(c), caption: A.captionOf(c) }));
+    return items.sort((a, b) => a.time - b.time);
+  }
+
   function renderAlbum(out, t, cs) {
-    const ph = T.photos.filter((p) => p.trip_id === t.id).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
-    const catchPh = [];
-    cs.filter((c) => !c._pending).forEach((c) => A.catchPhotoPaths(c).forEach((path) => catchPh.push({ c, path })));
+    if (T.albumCatch) {
+      const c = cs.find((x) => x.client_id === T.albumCatch);
+      if (c) return renderAlbumCatch(out, t, c);
+      T.albumCatch = null;
+    }
+    const items = albumTop(t, cs);
+    const cover = coverOf(t);
+    const canCover = canEditTrip(t);
     out.innerHTML = `
       <div class="card">
         <div class="photo-actions">
           <label class="btn small">📷 Fotó készítése<input type="file" accept="image/*" capture="environment" class="visually-hidden" data-album-pick></label>
           <label class="btn small">🖼 Galériából<input type="file" accept="image/*" multiple class="visually-hidden" data-album-pick></label>
         </div>
-        <p class="hint">Bármilyen kép feltölthető (táj, tábor, csapat), mindegyikhez rövid memóval. A túra fogásainak fotói is itt látszanak 🐟 jellel.</p>
+        <p class="hint">Bármilyen kép feltölthető (táj, tábor, csapat), mindegyikhez rövid memóval. A 🐟 jelű képek a fogások listaképei – koppints rájuk a fogás összes képéért. A képek a készítésük ideje szerint, időrendben követik egymást.</p>
         ${T.queue.length ? `<div class="queue">
           ${T.queue.map((q, i) => `<div class="q-item"><img src="${esc(q.url)}" alt="">
-            <textarea data-q-memo="${i}" rows="2" maxlength="300" placeholder="Rövid memó (nem kötelező)">${esc(q.memo || "")}</textarea>
+            <div><textarea data-q-memo="${i}" rows="2" maxlength="300" placeholder="Rövid memó (nem kötelező)">${esc(q.memo || "")}</textarea>
+              <small class="hint">${q.taken ? `Készült: ${esc(dtFmt(q.taken.toISOString()))}${q.takenSrc === "file" ? " (fájl dátuma)" : ""}` : "A készítés ideje nem olvasható ki – a feltöltés ideje lesz."}</small></div>
             <button type="button" class="x-btn" data-q-del="${i}" aria-label="Kép elvetése">✕</button></div>`).join("")}
           <div class="row-btns"><button type="button" class="btn primary small" data-q-upload>Feltöltés (${T.queue.length})</button>
             <button type="button" class="btn small" data-q-clear>Mégse</button></div>
           <p class="msg" id="qMsg" role="status"></p></div>` : ""}
       </div>
-      ${ph.length || catchPh.length ? `<div class="album-grid">
-        ${ph.map((p, i) => `<figure class="a-tile" data-a="${i}">
-          <button type="button" class="a-img" data-album-view="p${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(p.path)}"></button>
-          <figcaption>${p.memo ? esc(p.memo) : `<span class="hint">nincs memó</span>`}<small>${esc(A.nameOf(p.user_id))}</small>
-            ${own(p) ? `<span class="a-acts"><button type="button" class="link" data-memo-edit="${esc(p.id)}">✎ Memó</button><button type="button" class="link btn-danger-link" data-photo-del="${esc(p.id)}">Törlés</button></span>` : ""}
-          </figcaption></figure>`).join("")}
-        ${catchPh.map((x, i) => `<figure class="a-tile">
-          <button type="button" class="a-img" data-album-view="c${i}" aria-label="Fogás fotójának megnyitása"><img alt="" loading="lazy" data-path="${esc(x.path)}"><span class="a-fish">🐟</span></button>
-          <figcaption>${esc(x.c.species)}${x.c.weight_kg != null ? " – " + esc(kg(x.c.weight_kg)) : ""}<small>${esc(A.anglerOf(x.c))}</small></figcaption></figure>`).join("")}
+      ${items.length ? `<div class="album-grid">
+        ${items.map((x, i) => {
+          const isCover = cover && x.path === cover;
+          if (x.kind === "catch") {
+            const c = x.c;
+            return `<figure class="a-tile catch-cover">
+              <button type="button" class="a-img" data-album-catch="${esc(c.client_id)}" aria-label="${esc(c.species)} – a fogás képei"><img alt="" loading="lazy" data-path="${esc(x.path)}">
+                <span class="a-fish" title="Fogás listaképe">🐟</span>${x.n > 1 ? `<span class="a-count">📷 ${x.n}</span>` : ""}${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
+              <figcaption>${esc(c.species)}${c.weight_kg != null ? " – " + esc(kg(c.weight_kg)) : ""}<small>${esc(A.anglerOf(c))} · ${esc(dtFmt(c.caught_at))}</small>
+                ${canCover && !isCover ? `<span class="a-acts"><button type="button" class="link" data-set-cover="${esc(x.path)}">★ Legyen a borító</button></span>` : ""}</figcaption></figure>`;
+          }
+          const p = x.p;
+          return `<figure class="a-tile">
+            <button type="button" class="a-img" data-album-view="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(p.path)}">${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
+            <figcaption>${p.memo ? esc(p.memo) : `<span class="hint">nincs memó</span>`}<small>${esc(A.nameOf(p.user_id))} · ${esc(dtFmt(p.taken_at || p.created_at))}</small>
+              <span class="a-acts">${own(p) ? `<button type="button" class="link" data-memo-edit="${esc(p.id)}">✎ Memó</button><button type="button" class="link btn-danger-link" data-photo-del="${esc(p.id)}">Törlés</button>` : ""}
+              ${canCover && !isCover ? `<button type="button" class="link" data-set-cover="${esc(p.path)}">★ Borító</button>` : ""}</span>
+            </figcaption></figure>`;
+        }).join("")}
       </div>` : `<div class="card empty">Még nincs kép ezen a túrán.</div>`}`;
-    T.albumItems = ph.map((p) => ({ path: p.path, caption: `${p.memo ? p.memo + " – " : ""}${A.nameOf(p.user_id)}, ${dtFmt(p.created_at)}` }))
-      .concat(catchPh.map((x) => ({ path: x.path, caption: A.captionOf(x.c) })));
-    (async () => {
-      const urls = await A.signedUrlsFor(T.albumItems.map((x) => x.path));
-      out.querySelectorAll("img[data-path]").forEach((img) => { const u = urls[img.dataset.path]; if (u) img.src = u; });
-    })();
+    T.albumItems = items;
+    fillAlbumImgs(out, items.map((x) => x.path));
   }
 
-  async function viewAlbum(code) {
+  function renderAlbumCatch(out, t, c) {
+    const paths = A.catchPhotoPaths(c);
+    const cov = A.coverPath(c);
+    const ordered = cov ? [cov].concat(paths.filter((x) => x !== cov)) : paths;
+    out.innerHTML = `
+      <div class="card album-sub-head">
+        <button type="button" class="link" data-album-up>‹ Vissza az albumhoz</button>
+        <div class="trip-title">🐟 ${esc(c.species)}${c.weight_kg != null ? " – " + esc(kg(c.weight_kg)) : ""}</div>
+        <div class="trip-sub">${esc(A.anglerOf(c))} · ${esc(c.water)} · ${esc(dtFmt(c.caught_at))}</div>
+      </div>
+      <div class="album-grid">
+        ${ordered.map((path, i) => `<figure class="a-tile">
+          <button type="button" class="a-img" data-album-sub="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(path)}">${path === cov ? `<span class="a-cover">★ Listakép</span>` : ""}</button>
+        </figure>`).join("")}
+      </div>`;
+    T.albumSub = { paths: ordered, caption: A.captionOf(c) };
+    fillAlbumImgs(out, ordered);
+  }
+
+  function fillAlbumImgs(out, paths) {
+    A.signedUrlsFor(paths).then((urls) => {
+      out.querySelectorAll("img[data-path]").forEach((img) => { const u = urls[img.dataset.path]; if (u) img.src = u; });
+    });
+  }
+
+  async function viewAlbum(i) {
     const items = T.albumItems || [];
-    const nOwn = T.photos.filter((p) => p.trip_id === T.openId).length;
-    const i = code[0] === "p" ? Number(code.slice(1)) : nOwn + Number(code.slice(1));
     const urls = await A.signedUrlsFor(items.map((x) => x.path));
-    const list = items.map((x) => ({ url: urls[x.path], caption: x.caption })).filter((x) => x.url);
-    const idx = Math.max(0, list.findIndex((x) => x.url === urls[items[i] && items[i].path]));
+    const list = items.map((x, k) => ({ k, url: urls[x.path], caption: x.caption + (x.kind === "catch" && x.n > 1 ? ` · 📷 ${x.n} kép – koppints a 🐟 képre az albumban` : "") })).filter((x) => x.url);
+    const idx = Math.max(0, list.findIndex((x) => x.k === Number(i)));
     A.openViewer(list.map((x) => x.url), idx, list.map((x) => x.caption));
+  }
+  async function viewAlbumSub(i) {
+    const sub = T.albumSub;
+    if (!sub) return;
+    const urls = await A.signedUrlsFor(sub.paths);
+    const list = sub.paths.map((p) => urls[p]).filter(Boolean);
+    A.openViewer(list, Math.min(Number(i), list.length - 1), sub.caption);
+  }
+
+  async function setCover(path) {
+    if (!navigator.onLine) { toast("Ehhez internetkapcsolat kell."); return; }
+    try {
+      const { data, error } = await state.sb.from("trips").update({ cover_path: path }).eq("id", T.openId).select("id");
+      if (error) {
+        if (/cover_path/.test((error.message || "") + (error.details || ""))) throw new Error("Ehhez az adatbázis-frissítés (supabase_frissites_v5.sql) szükséges.");
+        throw error;
+      }
+      if (!data || !data.length) throw new Error("A borítót a túra kiírója vagy az admin állíthatja be.");
+      toast("Borítókép beállítva.");
+      await refresh();
+    } catch (x) { toast(errText(x)); }
+  }
+
+  // A kép készítésének ideje a fotó adataiból (EXIF DateTimeOriginal), ha nincs: a fájl dátuma
+  async function takenAt(file) {
+    const d = await A.exifDate(file).catch(() => null);
+    if (d) return { taken: d, src: "exif" };
+    const lm = file.lastModified;
+    if (lm && Math.abs(Date.now() - lm) > 2 * 60000 && lm > Date.UTC(1995, 0, 1)) return { taken: new Date(lm), src: "file" };
+    return { taken: null, src: null };
   }
 
   async function onAlbumPick(input) {
@@ -850,10 +1090,12 @@ window.TFTTrips = function (A) {
     const room = 20 - T.queue.length;
     for (const f of files.slice(0, room)) {
       try {
+        const tk = await takenAt(f);
         const { blob } = await A.prepareImage(f);
-        T.queue.push({ blob, url: URL.createObjectURL(blob), memo: "" });
+        T.queue.push({ blob, url: URL.createObjectURL(blob), memo: "", taken: tk.taken, takenSrc: tk.src });
       } catch (x) { toast(errText(x)); }
     }
+    T.queue.sort((a, b) => (a.taken ? a.taken.getTime() : Infinity) - (b.taken ? b.taken.getTime() : Infinity));
     if (files.length > room) toast("Egyszerre legfeljebb 20 kép tölthető fel.");
     render();
   }
@@ -871,7 +1113,13 @@ window.TFTTrips = function (A) {
         msg.className = "msg"; msg.textContent = `Feltöltés: ${i + 1} / ${T.queue.length}…`;
         const path = `${state.uid}/trip-${T.openId}/${A.uuid()}.${A.extOf(q.blob.type)}`;
         await A.uploadPhoto(q.blob, path);
-        const { error } = await state.sb.from("trip_photos").insert({ trip_id: T.openId, path, memo: (q.memo || "").trim() || null });
+        const row = { trip_id: T.openId, path, memo: (q.memo || "").trim() || null };
+        if (q.taken) row.taken_at = q.taken.toISOString();
+        let { error } = await state.sb.from("trip_photos").insert(row);
+        if (error && row.taken_at && /taken_at/.test((error.message || "") + (error.details || ""))) {
+          delete row.taken_at; // az 5. verziós adatbázis-frissítés még nem futott le
+          ({ error } = await state.sb.from("trip_photos").insert(row));
+        }
         if (error) { state.sb.storage.from("photos").remove([path]).catch(() => {}); throw error; }
         q.done = true; ok++;
       }
@@ -971,14 +1219,20 @@ window.TFTTrips = function (A) {
   function onClick(e) {
     const g = (sel) => e.target.closest(sel);
     let el;
-    if ((el = g("[data-trip-open]"))) { A.showTab("tabTrips"); open(el.dataset.tripOpen); return; }
+    if ((el = g("[data-trip-open]"))) { A.showTab("tabTrips"); open(el.dataset.tripOpen, el.dataset.openSec); return; }
     if (!g("#tabTrips")) return;
     if (g("[data-trip-new]")) return openForm(null);
-    if (g("[data-trip-cancel]")) { T.view = T.editId ? "detail" : "list"; render(); return; }
+    if ((el = g("[data-sg-make]"))) { const x = suggestions().find((y) => y.id === el.dataset.sgMake); if (x) openForm(null, x); return; }
+    if ((el = g("[data-sg-hide]"))) {
+      try { localStorage.setItem("tripSuggestHidden", JSON.stringify(dismissed().concat([el.dataset.sgHide]).slice(-300))); } catch (_) { /* nincs tároló */ }
+      render(); return;
+    }
+    if (g("[data-sg-all]")) { T.allSuggest = !T.allSuggest; render(); return; }
+    if (g("[data-trip-cancel]")) { T.view = T.editId ? "detail" : "list"; T.prefill = null; render(); return; }
     if (g("[data-trip-back]")) { T.view = "list"; T.openId = null; render(); return; }
     if ((el = g("[data-trip-edit]"))) return openForm(el.dataset.tripEdit);
     if ((el = g("[data-trip-del]"))) return deleteTrip(el.dataset.tripDel);
-    if ((el = g("[data-trip-sec]"))) { T.sec = el.dataset.tripSec; T.pickMode = false; render(); return; }
+    if ((el = g("[data-trip-sec]"))) { T.sec = el.dataset.tripSec; T.pickMode = false; T.albumCatch = null; render(); return; }
     if ((el = g("[data-trip-chip]"))) return formChip(el.dataset.tripChip);
     if ((el = g("[data-trip-loc]"))) return formLoc(el.dataset.tripLoc);
     if ((el = g("[data-rsvp]"))) return setRsvp(el.dataset.rsvp);
@@ -1002,6 +1256,10 @@ window.TFTTrips = function (A) {
       return;
     }
     if ((el = g("[data-album-view]"))) return viewAlbum(el.dataset.albumView);
+    if ((el = g("[data-album-catch]"))) { T.albumCatch = el.dataset.albumCatch; render(); window.scrollTo(0, 0); return; }
+    if (g("[data-album-up]")) { T.albumCatch = null; render(); return; }
+    if ((el = g("[data-album-sub]"))) return viewAlbumSub(el.dataset.albumSub);
+    if ((el = g("[data-set-cover]"))) return setCover(el.dataset.setCover);
     if ((el = g("[data-q-del]"))) { const q = T.queue.splice(Number(el.dataset.qDel), 1)[0]; if (q) URL.revokeObjectURL(q.url); render(); return; }
     if (g("[data-q-clear]")) { T.queue.forEach((q) => URL.revokeObjectURL(q.url)); T.queue = []; render(); return; }
     if (g("[data-q-upload]")) return uploadQueue();
@@ -1019,6 +1277,7 @@ window.TFTTrips = function (A) {
     const tab = $("#tabTrips");
     tab.addEventListener("input", (e) => {
       if (e.target.dataset.fmt) onFormInput(e);
+      if (e.target.id === "tripSearch") { T.q = e.target.value; renderListBody(); }
       if (e.target.dataset.qMemo != null) { const q = T.queue[Number(e.target.dataset.qMemo)]; if (q) q.memo = e.target.value; }
     });
     tab.addEventListener("change", (e) => {
@@ -1032,17 +1291,32 @@ window.TFTTrips = function (A) {
   function openFromHash() {
     const m = location.hash.match(/^#tura-([0-9a-f-]{8,})$/i);
     if (!m) return false;
-    history.replaceState(null, "", location.pathname + location.search);
+    history.replaceState(history.state, "", location.pathname + location.search);
     A.showTab("tabTrips");
     open(m[1]);
     if (!tripById(m[1])) refresh().then(() => { if (tripById(m[1])) open(m[1]); });
     return true;
   }
 
+  // A kezdőlap összefoglalója
+  function homeInfo() {
+    const now = Date.now();
+    const dec = (t) => {
+      const mine = T.people.find((p) => p.trip_id === t.id && p.user_id === state.uid);
+      return Object.assign({}, t, { _status: status(t, now), _range: rangeText(t), _mine: mine ? RSVP[mine.rsvp] : null });
+    };
+    const active = T.trips.filter((t) => status(t, now) === "active").sort((a, b) => ms(a.start_at) - ms(b.start_at)).map(dec);
+    const planned = T.trips.filter((t) => status(t, now) === "planned").sort((a, b) => ms(a.start_at) - ms(b.start_at)).map(dec);
+    let suggest = 0;
+    try { suggest = suggestions().length; } catch (_) { suggest = 0; }
+    return { active, planned, total: T.trips.length, suggest };
+  }
+
   bind();
   return {
+    homeInfo,
     refresh, loadCache, render, open, openFromHash, tripsOfCatch, tripById, all: () => T.trips,
     // teszteléshez
-    _: { waterMatch, status, catchesOf, peopleOf, keyToMs, T }
+    _: { waterMatch, status, catchesOf, peopleOf, keyToMs, suggestions, T }
   };
 };
