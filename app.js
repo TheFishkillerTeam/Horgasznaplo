@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "5.0";
+  const APP_VERSION = "5.2";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -283,7 +283,7 @@
       trips = window.TFTTrips({
         state, $, esc, numFmt, dtFmt, tzParts, toast, errText, idb, uuid, TZ, CFG, APP_URL,
         nameOf, anglerOf, everyEntry, cardHtml, loadThumbs, photoCount, catchPhotoPaths, captionOf,
-        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate
+        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate, placeLabel
       });
     }
     if (typeof window.TFTRecords === "function") {
@@ -595,6 +595,7 @@
     $("#lateWarn").classList.add("hidden");
     state.tripCtx = null;
     $("#tripCtx").classList.add("hidden");
+    $("#placeMsg").textContent = "";
     // Friss fogásnál a GPS-pozíció megmarad (ugyanaz a hely), egyébként törlődik
     if (forEdit || wasEditing || (state.gps && state.gps.source !== "gps")) setLocation(null);
     else renderLocation();
@@ -786,6 +787,8 @@
 
   function setLocation(loc) {
     state.gps = loc;
+    // Más forrású hely (GPS, térkép, törlés) esetén a „Korábbi helyek” választás már nem érvényes
+    if (!loc || loc.source !== "list") { const sel = $("#prevPlaces"); if (sel) sel.value = ""; const m = $("#placeMsg"); if (m) m.textContent = ""; }
     renderLocation();
   }
 
@@ -840,31 +843,55 @@
   }
 
   // Korábbi fogáshelyek (a társaság összes fogásából, gyakoriság szerint)
-  function fillPlaces() {
+  // Korábbi helyek: vízterület + állás szerint egyszer (GPS nélküli helyek is).
+  // A pozíció a hely legutóbbi, helymeghatározással rögzített fogásáé.
+  const placeKey = (v) => String(v || "").toLowerCase().replace(/\s+/g, " ").replace(/\s*([-–,.])\s*/g, "$1").trim();
+  function groupPlaces(keyFn, nameFn) {
     const map = new Map();
-    state.catches.concat(state.outbox).forEach((c) => {
-      if (c.lat == null || c.lon == null) return;
-      const key = `${(c.water || "").trim()}|${(c.spot || "").trim()}|${Number(c.lat).toFixed(3)}|${Number(c.lon).toFixed(3)}`;
-      const e = map.get(key) || { water: c.water || "", spot: c.spot || "", lat: Number(c.lat), lon: Number(c.lon), n: 0, mine: 0 };
-      e.n++;
-      if (c.user_id === state.uid) e.mine++;
-      map.set(key, e);
-    });
-    state.places = Array.from(map.values()).sort((a, b) => b.mine - a.mine || b.n - a.n || a.water.localeCompare(b.water, "hu"));
+    state.catches.concat(state.outbox)
+      .slice().sort((a, b) => (a.caught_at < b.caught_at ? 1 : -1))
+      .forEach((c) => {
+        if (!(c.water || "").trim()) return;
+        const key = keyFn(c);
+        const e = map.get(key) || { names: {}, spots: {}, lat: null, lon: null, n: 0, mine: 0 };
+        const w = nameFn ? nameFn(c) : c.water.trim(), sp = (c.spot || "").trim();
+        e.names[w] = (e.names[w] || 0) + 1;
+        if (sp) e.spots[sp] = (e.spots[sp] || 0) + 1;
+        if (e.lat == null && c.lat != null && c.lon != null) { e.lat = Number(c.lat); e.lon = Number(c.lon); }
+        e.n++;
+        if (c.user_id === state.uid) e.mine++;
+        map.set(key, e);
+      });
+    const top = (o) => Object.keys(o).sort((a, b) => o[b] - o[a])[0] || "";
+    return Array.from(map.values()).map((e) => ({ water: top(e.names), spot: top(e.spots), lat: e.lat, lon: e.lon, n: e.n, mine: e.mine }))
+      .sort((a, b) => b.mine - a.mine || b.n - a.n || a.water.localeCompare(b.water, "hu"));
+  }
+  const placeLabel = (p, withSpot) => `${esc(p.water)}${withSpot && p.spot ? " – " + esc(p.spot) : ""} (${p.n}×)${p.lat == null ? " · GPS nélkül" : ""}`;
+  function fillPlaces() {
+    state.places = groupPlaces((c) => placeKey(c.water) + "|" + placeKey(c.spot));
+    // Túrákhoz: csak a vízterület alapneve („Zagyva, jászberényi szakasz” → „Zagyva”), mert a túra így minden szakaszt lefed
+    const baseWater = (w) => String(w || "").split(/[,(]| - | – /)[0].trim();
+    state.waterPlaces = groupPlaces((c) => placeKey(baseWater(c.water)), (c) => baseWater(c.water));
     const sel = $("#prevPlaces");
     sel.innerHTML = `<option value="">${state.places.length ? "— válassz a korábbi fogáshelyek közül —" : "— még nincs korábbi fogáshely —"}</option>` +
-      state.places.map((p, i) => `<option value="${i}">${esc(p.water)}${p.spot ? " – " + esc(p.spot) : ""} (${p.n}×)</option>`).join("");
+      state.places.map((p, i) => `<option value="${i}">${placeLabel(p, true)}</option>`).join("");
   }
 
   function onPlacePicked() {
     const sel = $("#prevPlaces");
     const p = state.places && state.places[Number(sel.value)];
-    sel.value = "";
-    if (!p) return;
-    setLocation({ lat: p.lat, lon: p.lon, acc: null, source: "list" });
+    const msg = $("#placeMsg");
+    if (!p) { msg.textContent = ""; return; }
     const f = $("#catchForm");
     if (p.water) f.water.value = p.water;
-    if (p.spot && !f.spot.value.trim()) f.spot.value = p.spot;
+    if (p.spot) f.spot.value = p.spot;
+    const what = `${p.water}${p.spot ? " – " + p.spot : ""}`;
+    if (p.lat != null) {
+      setLocation({ lat: p.lat, lon: p.lon, acc: null, source: "list" });
+      msg.className = "msg ok"; msg.textContent = `✓ ${what}: vízterület, állás és pozíció beállítva.`;
+    } else {
+      msg.className = "msg warn"; msg.textContent = `✓ ${what}: vízterület és állás beírva. GPS-pozíció ehhez a helyhez nincs – az időjáráshoz jelöld ki a térképen.`;
+    }
   }
 
   // Térképes kijelölés (Leaflet + OpenStreetMap; internet kell hozzá)

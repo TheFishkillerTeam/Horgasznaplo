@@ -438,9 +438,10 @@ window.TFTTrips = function (A) {
             <button type="button" class="btn small" data-trip-loc="map">🗺 Térképen</button>
             <button type="button" class="btn small" data-trip-loc="clear">Törlés</button>
           </div>
-          <label class="field loc-prev">Korábbi helyek
+          <label class="field loc-prev">Korábbi vízterületek
             <select id="tripPrevPlaces">${placeOptions()}</select>
           </label>
+          <p class="msg" id="tripPlaceMsg" role="status"></p>
           <p class="hint">Az időjárási adatok ehhez a helyhez készülnek. Ha nincs megadva, az első helymeghatározással rögzített fogás helyét használom.</p>
         </div>
         <button class="btn primary block" type="submit">${t ? "Módosítás mentése" : "Túra létrehozása"}</button>
@@ -451,9 +452,9 @@ window.TFTTrips = function (A) {
   }
 
   function placeOptions() {
-    const pl = state.places || [];
-    return `<option value="">${pl.length ? "— válassz a korábbi fogáshelyek közül —" : "— még nincs korábbi fogáshely —"}</option>` +
-      pl.map((p, i) => `<option value="${i}">${esc(p.water)}${p.spot ? " – " + esc(p.spot) : ""} (${p.n}×)</option>`).join("");
+    const pl = state.waterPlaces || [];
+    return `<option value="">${pl.length ? "— válassz a korábbi vízterületek közül —" : "— még nincs korábbi vízterület —"}</option>` +
+      pl.map((p, i) => `<option value="${i}">${A.placeLabel(p, false)}</option>`).join("");
   }
   function renderLoc() {
     const el = $("#tripLocStatus");
@@ -502,6 +503,9 @@ window.TFTTrips = function (A) {
   }
 
   function formLoc(kind) {
+    // Másik helymegadás: a listás választás már nem érvényes
+    const sel = $("#tripPrevPlaces"); if (sel) sel.value = "";
+    const m = $("#tripPlaceMsg"); if (m) m.textContent = "";
     if (kind === "clear") { T.loc = null; renderLoc(); return; }
     if (kind === "gps") {
       if (!("geolocation" in navigator)) { toast("Ez a készülék nem támogatja a helymeghatározást."); return; }
@@ -516,12 +520,17 @@ window.TFTTrips = function (A) {
   }
 
   function formPlace(sel) {
-    const p = (state.places || [])[Number(sel.value)];
-    sel.value = "";
-    if (!p) return;
-    T.loc = { lat: p.lat, lon: p.lon };
+    const p = (state.waterPlaces || [])[Number(sel.value)];
+    const msg = $("#tripPlaceMsg");
+    if (!p) { msg.textContent = ""; return; }
     const f = $("#tripForm");
-    if (p.water && !f.water.value.trim()) f.water.value = p.water;
+    if (p.water) f.water.value = p.water;
+    if (p.lat != null) {
+      T.loc = { lat: p.lat, lon: p.lon };
+      msg.className = "msg ok"; msg.textContent = `✓ ${p.water}: vízterület és hely beállítva (a legutóbbi helymeghatározásos fogás alapján).`;
+    } else {
+      msg.className = "msg warn"; msg.textContent = `✓ ${p.water}: vízterület beírva. GPS-pozíció ehhez nincs – az időjáráshoz jelöld ki a helyet a térképen.`;
+    }
     renderLoc();
   }
 
@@ -967,8 +976,11 @@ window.TFTTrips = function (A) {
   function albumTop(t, cs) {
     const items = albumPhotos(t).map((p) => ({ kind: "photo", p, path: p.path, time: photoTime(p),
       caption: `${p.memo ? p.memo + " – " : ""}${A.nameOf(p.user_id)}, ${dtFmt(p.taken_at || p.created_at)}${p.taken_at ? "" : " (feltöltve)"}` }));
-    cs.filter((c) => !c._pending && A.coverPath(c)).forEach((c) => items.push({ kind: "catch", c, path: A.coverPath(c), time: ms(c.caught_at), n: A.photoCount(c), caption: A.captionOf(c) }));
-    return items.sort((a, b) => a.time - b.time);
+    const catchItems = cs.filter((c) => !c._pending && A.coverPath(c))
+      .map((c) => ({ kind: "catch", c, path: A.coverPath(c), time: ms(c.caught_at), n: A.photoCount(c), caption: A.captionOf(c) }))
+      .sort((a, b) => a.time - b.time);
+    // Két blokk: előbb a túraképek, utána a fogások – mindkettő időrendben
+    return items.sort((a, b) => a.time - b.time).concat(catchItems);
   }
 
   function renderAlbum(out, t, cs) {
@@ -980,13 +992,32 @@ window.TFTTrips = function (A) {
     const items = albumTop(t, cs);
     const cover = coverOf(t);
     const canCover = canEditTrip(t);
+    const nPhotos = items.filter((x) => x.kind === "photo").length, nCatch = items.length - nPhotos;
+    const tileHtml = (x, i) => {
+      const isCover = cover && x.path === cover;
+      if (x.kind === "catch") {
+        const c = x.c;
+        return `<figure class="a-tile catch-cover">
+          <button type="button" class="a-img" data-album-catch="${esc(c.client_id)}" aria-label="${esc(c.species)} – a fogás képei"><img alt="" loading="lazy" data-path="${esc(x.path)}">
+            <span class="a-fish" title="Fogás listaképe">🐟</span>${x.n > 1 ? `<span class="a-count">📷 ${x.n}</span>` : ""}${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
+          <figcaption>${esc(c.species)}${c.weight_kg != null ? " – " + esc(kg(c.weight_kg)) : ""}<small>${esc(A.anglerOf(c))} · ${esc(dtFmt(c.caught_at))}</small>
+            ${canCover && !isCover ? `<span class="a-acts"><button type="button" class="link" data-set-cover="${esc(x.path)}">★ Legyen a borító</button></span>` : ""}</figcaption></figure>`;
+      }
+      const p = x.p;
+      return `<figure class="a-tile">
+        <button type="button" class="a-img" data-album-view="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(p.path)}">${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
+        <figcaption>${p.memo ? esc(p.memo) : `<span class="hint">nincs memó</span>`}<small>${esc(A.nameOf(p.user_id))} · ${esc(dtFmt(p.taken_at || p.created_at))}</small>
+          <span class="a-acts">${own(p) ? `<button type="button" class="link" data-memo-edit="${esc(p.id)}">✎ Memó</button><button type="button" class="link btn-danger-link" data-photo-del="${esc(p.id)}">Törlés</button>` : ""}
+          ${canCover && !isCover ? `<button type="button" class="link" data-set-cover="${esc(p.path)}">★ Borító</button>` : ""}</span>
+        </figcaption></figure>`;
+    };
     out.innerHTML = `
       <div class="card">
         <div class="photo-actions">
           <label class="btn small">📷 Fotó készítése<input type="file" accept="image/*" capture="environment" class="visually-hidden" data-album-pick></label>
           <label class="btn small">🖼 Galériából<input type="file" accept="image/*" multiple class="visually-hidden" data-album-pick></label>
         </div>
-        <p class="hint">Bármilyen kép feltölthető (táj, tábor, csapat), mindegyikhez rövid memóval. A 🐟 jelű képek a fogások listaképei – koppints rájuk a fogás összes képéért. A képek a készítésük ideje szerint, időrendben követik egymást.</p>
+        <p class="hint">Bármilyen kép feltölthető (táj, tábor, csapat), mindegyikhez rövid memóval. A „Képek” blokkban a feltöltött képek, a „Fogások” blokkban a fogások 🐟 listaképei állnak, mindkettő időrendben. A 🐟 képre koppintva a fogás összes képe megnyílik.</p>
         ${T.queue.length ? `<div class="queue">
           ${T.queue.map((q, i) => `<div class="q-item"><img src="${esc(q.url)}" alt="">
             <div><textarea data-q-memo="${i}" rows="2" maxlength="300" placeholder="Rövid memó (nem kötelező)">${esc(q.memo || "")}</textarea>
@@ -996,26 +1027,9 @@ window.TFTTrips = function (A) {
             <button type="button" class="btn small" data-q-clear>Mégse</button></div>
           <p class="msg" id="qMsg" role="status"></p></div>` : ""}
       </div>
-      ${items.length ? `<div class="album-grid">
-        ${items.map((x, i) => {
-          const isCover = cover && x.path === cover;
-          if (x.kind === "catch") {
-            const c = x.c;
-            return `<figure class="a-tile catch-cover">
-              <button type="button" class="a-img" data-album-catch="${esc(c.client_id)}" aria-label="${esc(c.species)} – a fogás képei"><img alt="" loading="lazy" data-path="${esc(x.path)}">
-                <span class="a-fish" title="Fogás listaképe">🐟</span>${x.n > 1 ? `<span class="a-count">📷 ${x.n}</span>` : ""}${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
-              <figcaption>${esc(c.species)}${c.weight_kg != null ? " – " + esc(kg(c.weight_kg)) : ""}<small>${esc(A.anglerOf(c))} · ${esc(dtFmt(c.caught_at))}</small>
-                ${canCover && !isCover ? `<span class="a-acts"><button type="button" class="link" data-set-cover="${esc(x.path)}">★ Legyen a borító</button></span>` : ""}</figcaption></figure>`;
-          }
-          const p = x.p;
-          return `<figure class="a-tile">
-            <button type="button" class="a-img" data-album-view="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(p.path)}">${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
-            <figcaption>${p.memo ? esc(p.memo) : `<span class="hint">nincs memó</span>`}<small>${esc(A.nameOf(p.user_id))} · ${esc(dtFmt(p.taken_at || p.created_at))}</small>
-              <span class="a-acts">${own(p) ? `<button type="button" class="link" data-memo-edit="${esc(p.id)}">✎ Memó</button><button type="button" class="link btn-danger-link" data-photo-del="${esc(p.id)}">Törlés</button>` : ""}
-              ${canCover && !isCover ? `<button type="button" class="link" data-set-cover="${esc(p.path)}">★ Borító</button>` : ""}</span>
-            </figcaption></figure>`;
-        }).join("")}
-      </div>` : `<div class="card empty">Még nincs kép ezen a túrán.</div>`}`;
+      ${items.length ? "" : `<div class="card empty">Még nincs kép ezen a túrán.</div>`}
+      ${nPhotos ? `<h3 class="sec-title">Képek (${nPhotos})</h3><div class="album-grid">${items.map((x, i) => (x.kind === "photo" ? tileHtml(x, i) : "")).join("")}</div>` : ""}
+      ${nCatch ? `<h3 class="sec-title">Fogások (${nCatch})</h3><div class="album-grid">${items.map((x, i) => (x.kind === "catch" ? tileHtml(x, i) : "")).join("")}</div>` : ""}`;
     T.albumItems = items;
     fillAlbumImgs(out, items.map((x) => x.path));
   }
