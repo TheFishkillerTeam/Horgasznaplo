@@ -114,6 +114,47 @@ window.TFTTrips = function (A) {
   const catchesOf = (t) => A.everyEntry().filter((c) => inTrip(t, c)).sort((a, b) => (a.caught_at < b.caught_at ? -1 : 1));
   const tripsOfCatch = (c) => T.trips.filter((t) => inTrip(t, c));
 
+  // ------------------------------------------------------------------
+  // Újdonságok (7. verzió): mások által hozzáadott / módosított elemek a túra részeinek
+  // utolsó megnyitása óta. Kulcsok: t:<id>:i (áttekintés), :c (fogások), :a (album), :p (beszámolók)
+  // ------------------------------------------------------------------
+  const NW = () => !!(A.news && A.news.ok());
+  const SECKEY = { overview: "i", catches: "c", album: "a", posts: "p" };
+  const nKey = (t, sec) => `t:${t.id}:${SECKEY[sec] || "i"}`;
+  const isNewCatch = (t, c, live) => !c._pending && (A.news.isNew(c.created_at, nKey(t, "catches"), c.user_id, live) ||
+    T.links.some((l) => l.trip_id === t.id && l.client_id === c.client_id && l.included && A.news.isNew(l.created_at, nKey(t, "catches"), l.set_by, live)));
+  const isNewPost = (t, p, live) => A.news.isNew(A.news.latest(p.created_at, p.updated_at), nKey(t, "posts"), p.user_id, live);
+  const isNewPhoto = (t, p, live) => A.news.isNew(p.created_at, nKey(t, "album"), p.user_id, live);
+  const isNewTrip = (t, live) => A.news.isNew(t.created_at, nKey(t, "overview"), t.created_by, live);
+  const isNewPerson = (t, p, live) => !!p.id && p.user_id !== state.uid &&
+    (A.news.isNew(p.created_at, nKey(t, "overview"), p.added_by || p.user_id, live) || A.news.isNew(p.updated_at, nKey(t, "overview"), p.updated_by, live));
+  function newsOf(t, live = true) {
+    if (!NW()) return null;
+    const fresh = isNewTrip(t, live);
+    const n = {
+      fresh,
+      edited: !fresh && A.news.isNew(t.updated_at, nKey(t, "overview"), t.updated_by, live),
+      people: fresh ? 0 : T.people.filter((p) => p.trip_id === t.id && isNewPerson(t, p, live)).length,
+      catches: catchesOf(t).filter((c) => isNewCatch(t, c, live)).length,
+      posts: T.posts.filter((p) => p.trip_id === t.id && isNewPost(t, p, live)).length,
+      photos: T.photos.filter((p) => p.trip_id === t.id && isNewPhoto(t, p, live)).length
+    };
+    n.any = n.fresh || n.edited || n.people + n.catches + n.posts + n.photos > 0;
+    return n;
+  }
+  const NEW = `<span class="new-chip">ÚJ</span>`;
+  function newsLine(n) {
+    if (!n || !n.any) return "";
+    const parts = [];
+    if (n.fresh) parts.push("Új túra");
+    if (n.catches) parts.push(`${n.catches} új fogás`);
+    if (n.posts) parts.push(`${n.posts} új beszámoló`);
+    if (n.photos) parts.push(`${n.photos} új fotó`);
+    if (n.people) parts.push(`${n.people} új jelentkezés`);
+    if (n.edited) parts.push("módosítva");
+    return `<span class="trip-news"><span class="news-dot" aria-hidden="true"></span>${esc(parts.join(" · "))}</span>`;
+  }
+
   // Résztvevők: a felvett sorok + akik fogást rögzítettek a túrán (automatikusan)
   function peopleOf(t) {
     const rows = T.people.filter((p) => p.trip_id === t.id).map((p) => Object.assign({}, p));
@@ -189,8 +230,9 @@ window.TFTTrips = function (A) {
     const nPo = T.posts.filter((p) => p.trip_id === t.id).length;
     const sum = scored.reduce((n, c) => n + (c.weight_kg != null ? Number(c.weight_kg) : 0), 0);
     const cov = coverOf(t);
+    const nw = newsOf(t);
     return `
-      <button type="button" class="card trip-card${cov ? " has-cover" : ""}" data-trip-open="${esc(t.id)}">
+      <button type="button" class="card trip-card${cov ? " has-cover" : ""}${nw && nw.any ? " has-news" : ""}" data-trip-open="${esc(t.id)}">
         <span class="trip-cover">${cov ? `<img alt="" loading="lazy" data-cover="${esc(cov)}">` : `<span class="trip-cover-ph">⚑</span>`}</span>
         <span class="trip-card-body">
           <span class="trip-card-head"><span class="trip-title">${esc(t.title)}</span>${statusBadge(s)}</span>
@@ -200,6 +242,7 @@ window.TFTTrips = function (A) {
             <span>👥 ${yes}</span><span>📷 ${nPh}</span><span>📝 ${nPo}</span>
             ${s !== "past" ? `<span class="trip-me">${mine ? "Te: " + esc(RSVP[mine.rsvp]) : "Még nem jelezted"}</span>` : ""}
           </span>
+          ${newsLine(nw)}
         </span>
       </button>`;
   }
@@ -214,6 +257,7 @@ window.TFTTrips = function (A) {
   }
 
   function renderList(box) {
+    if (A.news) { A.news.leave("t:"); T.newsTrip = null; }
     box.innerHTML = `
       ${T.missing ? missingHtml() : ""}
       <div class="card trips-head">
@@ -612,7 +656,14 @@ window.TFTTrips = function (A) {
     const cs = catchesOf(t);
     const nPh = T.photos.filter((p) => p.trip_id === t.id).length + cs.reduce((n, c) => n + A.photoCount(c), 0);
     const nPo = T.posts.filter((p) => p.trip_id === t.id).length;
-    const tab = (k, label) => `<button type="button" data-trip-sec="${k}" class="${T.sec === k ? "active" : ""}" aria-pressed="${T.sec === k}">${label}</button>`;
+    // A megnyitott rész megtekintettnek számít; a megnyitás előtti újdonságok „ÚJ” címkét kapnak
+    if (NW()) {
+      if (T.newsTrip !== t.id) { A.news.leave("t:"); T.newsTrip = t.id; }
+      A.news.enter(nKey(t, T.sec));
+    }
+    const nw = newsOf(t);
+    const dotN = { overview: nw && (nw.fresh || nw.edited || nw.people) ? 1 : 0, catches: nw ? nw.catches : 0, album: nw ? nw.photos : 0, posts: nw ? nw.posts : 0 };
+    const tab = (k, label) => `<button type="button" data-trip-sec="${k}" class="${T.sec === k ? "active" : ""}" aria-pressed="${T.sec === k}">${label}${dotN[k] ? `<span class="news-dot" title="Újdonság"></span>` : ""}</button>`;
     box.innerHTML = `
       <div class="card trip-head">
         <button type="button" class="link" data-trip-back>‹ Túrák</button>
@@ -650,7 +701,7 @@ window.TFTTrips = function (A) {
       const tag = p.guest_name ? `<span class="tag">vendég</span>` : "";
       const st = s === "past" ? (p.derived ? `<small>fogás alapján</small>` : "") :
         `<span class="rsvp ${p.rsvp}">${RSVP[p.rsvp]}</span>`;
-      return `<li class="person"><span>${esc(name)} ${tag}</span><span class="person-r">${st}
+      return `<li class="person"><span>${esc(name)} ${tag}${NW() && isNewPerson(t, p) ? NEW : ""}</span><span class="person-r">${st}
         ${p.id && W() ? `<button type="button" class="x-btn" data-person-del="${esc(p.id)}" aria-label="${esc(name)} eltávolítása">✕</button>` : ""}</span></li>`;
     };
     const visiblePpl = s === "past" ? ppl.filter((p) => p.rsvp !== "no") : ppl;
@@ -943,7 +994,7 @@ window.TFTTrips = function (A) {
       ${cs.length > 1 ? `<div class="trip-sort"><div class="seg2" role="group" aria-label="Sorrend">
         <button type="button" data-trip-sort="time" class="${T.catchSort === "time" ? "active" : ""}" aria-pressed="${T.catchSort === "time"}">Időrend</button>
         <button type="button" data-trip-sort="rank" class="${T.catchSort === "rank" ? "active" : ""}" aria-pressed="${T.catchSort === "rank"}">Rangsor (súly)</button></div></div>` : ""}
-      ${cs.length ? sortCatches(cs).map(({ c, rank }) => `<div class="card trip-catch">${rank ? `<div class="trip-rank">${rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank + "."} helyezés</div>` : ""}${A.cardHtml(c, { inner: true })}
+      ${cs.length ? sortCatches(cs).map(({ c, rank }) => `<div class="card trip-catch${NW() && isNewCatch(t, c) ? " is-new" : ""}">${NW() && isNewCatch(t, c) ? NEW : ""}${rank ? `<div class="trip-rank">${rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank + "."} helyezés</div>` : ""}${A.cardHtml(c, { inner: true })}
         ${c._pending || !W() ? "" : `<div class="trip-catch-foot"><button type="button" class="link" data-link-out="${esc(c.client_id)}">Kivétel a túrából</button></div>`}</div>`).join("")
         : `<div class="card empty">Még nincs fogás ezen a túrán.</div>`}`;
     A.loadThumbs(out, cs);
@@ -1007,7 +1058,7 @@ window.TFTTrips = function (A) {
       }
       const p = x.p;
       return `<figure class="a-tile">
-        <button type="button" class="a-img" data-album-view="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(p.path)}">${isCover ? `<span class="a-cover">Borító</span>` : ""}</button>
+        <button type="button" class="a-img" data-album-view="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(p.path)}">${isCover ? `<span class="a-cover">Borító</span>` : ""}${NW() && isNewPhoto(t, p) ? `<span class="a-new">ÚJ</span>` : ""}</button>
         <figcaption>${p.memo ? esc(p.memo) : `<span class="hint">nincs memó</span>`}<small>${esc(A.nameOf(p.user_id))} · ${esc(dtFmt(p.taken_at || p.created_at))}</small>
           <span class="a-acts">${own(p) ? `<button type="button" class="link" data-memo-edit="${esc(p.id)}">✎ Memó</button><button type="button" class="link btn-danger-link" data-photo-del="${esc(p.id)}">Törlés</button>` : ""}
           ${canCover && !isCover ? `<button type="button" class="link" data-set-cover="${esc(p.path)}">★ Borító</button>` : ""}</span>
@@ -1178,8 +1229,8 @@ window.TFTTrips = function (A) {
   function renderPosts(out, t) {
     const posts = T.posts.filter((p) => p.trip_id === t.id).sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
     out.innerHTML = `
-      ${posts.length ? posts.map((p) => `<div class="card post">
-        <div class="post-head"><b>${esc(A.nameOf(p.user_id))}</b><span class="hint">${esc(dtFmt(p.created_at))}${p.updated_at ? " · módosítva" : ""}</span></div>
+      ${posts.length ? posts.map((p) => `<div class="card post${NW() && isNewPost(t, p) ? " is-new" : ""}">
+        <div class="post-head"><b>${esc(A.nameOf(p.user_id))}${NW() && isNewPost(t, p) ? NEW : ""}</b><span class="hint">${esc(dtFmt(p.created_at))}${p.updated_at ? " · módosítva" : ""}</span></div>
         ${T.editPost === p.id
           ? `<textarea class="post-edit" rows="5" maxlength="5000">${esc(p.body)}</textarea>
              <div class="row-btns"><button type="button" class="btn small primary" data-post-save="${esc(p.id)}">Mentés</button><button type="button" class="btn small" data-post-cancel>Mégse</button></div>`
@@ -1325,7 +1376,8 @@ window.TFTTrips = function (A) {
     const planned = T.trips.filter((t) => status(t, now) === "planned").sort((a, b) => ms(a.start_at) - ms(b.start_at)).map(dec);
     let suggest = 0;
     try { suggest = suggestions().length; } catch (_) { suggest = 0; }
-    return { active, planned, total: T.trips.length, suggest };
+    const news = NW() ? T.trips.filter((t) => { const n = newsOf(t); return n && n.any; }).length : 0;
+    return { active, planned, total: T.trips.length, suggest, news };
   }
 
   bind();
@@ -1333,6 +1385,6 @@ window.TFTTrips = function (A) {
     homeInfo,
     refresh, loadCache, render, open, openFromHash, tripsOfCatch, tripById, all: () => T.trips,
     // teszteléshez
-    _: { waterMatch, status, catchesOf, peopleOf, keyToMs, suggestions, T }
+    _: { waterMatch, status, catchesOf, peopleOf, keyToMs, suggestions, newsOf, T }
   };
 };

@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "6.1";
+  const APP_VERSION = "7.0";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -218,6 +218,7 @@
   let trips = null;     // Horgásztúra napló modul (trips.js)
   let records = null;   // Rekordlisták (records.js)
   let family = null;    // Családtagok nézőként (family.js)
+  let news = null;      // Újdonságok jelölése (news.js)
   // Családtag (néző): mindent lát, de semmit nem módosíthat
   const isViewer = () => !!(state.me && state.me.role === "viewer");
   const viewerOk = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
@@ -239,6 +240,11 @@
     if (state.tab === "tabFamily" && tabId !== "tabFamily" && family) family.stopQr();
     const prev = state.tab;
     state.tab = tabId;
+    if (news && prev !== tabId) {
+      if (prev === "tabLog") news.leave("log");
+      if (prev === "tabGallery") news.leave("gallery");
+      if (prev === "tabTrips") news.leave("t:");
+    }
     $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== tabId));
     $("#btnHome").classList.toggle("hidden", tabId === "tabHome" || $("#viewMain").classList.contains("hidden"));
     document.documentElement.style.setProperty("--top-h", $(".topbar").offsetHeight + "px");
@@ -286,8 +292,9 @@
     }
 
     bindUi();
+    if (typeof window.TFTNews === "function") news = window.TFTNews({ state, idb });
     if (typeof window.TFTTrips === "function") {
-      trips = window.TFTTrips({
+      trips = window.TFTTrips({ news,
         state, $, esc, numFmt, dtFmt, tzParts, toast, errText, idb, uuid, TZ, CFG, APP_URL,
         nameOf, anglerOf, everyEntry, cardHtml, loadThumbs, photoCount, catchPhotoPaths, captionOf,
         signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate, placeLabel
@@ -378,6 +385,7 @@
     state.catches = (await idb.get("kv", "catches").catch(() => null)) || [];
     state.profiles = (await idb.get("kv", "profiles").catch(() => null)) || {};
     if (trips) await trips.loadCache();
+    if (news) await news.loadCache();
   }
 
   let entering = null;
@@ -434,6 +442,7 @@
       } catch (_) { /* offline */ }
       if (isViewer() && !viewerOk(state.me)) { if (family) family.showExpired(); return; }
     }
+    if (news) await news.load();
     try {
       const pr = await state.sb.from("profiles").select("id, display_name, approved");
       if (pr.error) throw pr.error;
@@ -591,6 +600,7 @@
     try { await state.sb.auth.signOut(); } catch (_) { /* offline */ }
     await idb.del("kv", "me").catch(() => {});
     state.uid = null; state.me = null;
+    if (news) news.reset();
     show("viewAuth");
   }
 
@@ -1130,8 +1140,11 @@
     const last = all[0];
     const first = (state.me.display_name || "").split(" ").slice(-1)[0];
     const viewer = isViewer();
-    const tile = (go, icon, title, sub) => `<button type="button" class="home-tile" data-go="${go}">
-        <span class="ht-icon" aria-hidden="true">${icon}</span><span class="ht-title">${title}</span><span class="ht-sub">${sub}</span></button>`;
+    const tile = (go, icon, title, sub, fresh) => `<button type="button" class="home-tile${fresh ? " has-news" : ""}" data-go="${go}">
+        <span class="ht-icon" aria-hidden="true">${icon}</span><span class="ht-title">${title}</span><span class="ht-sub">${sub}</span>${fresh ? `<span class="ht-news"><span class="news-dot" aria-hidden="true"></span>${fresh}</span>` : ""}</button>`;
+    // Újdonságok a legutóbbi megnyitás óta (mások által)
+    const newLog = news && news.ok() ? all.filter((c) => isNewLog(c, true)).length : 0;
+    const newGal = news && news.ok() ? all.filter((c) => photoCount(c) > 0 && news.isNew(c.created_at, "gallery", c.user_id, true)).length : 0;
     const tripSub = ti.active.length ? `${ti.active.length} most zajlik` : ti.planned.length ? `${ti.planned.length} tervezett` : `${ti.total} túra`;
     box.innerHTML = `
       <div class="home-hello">Szia${first ? ", " + esc(first) : ""}!</div>
@@ -1140,10 +1153,10 @@
         : `<button type="button" class="home-new" data-go="tabNew"><span aria-hidden="true">＋</span> Új fogás rögzítése</button>`}
       ${mine ? `<button type="button" class="card home-alert" data-home-sync>⟳ ${mine} fogás feltöltésre vár – koppints a küldéshez</button>` : ""}
       <div class="home-grid">
-        ${tile("tabLog", "☰", "Napló", `${all.length} fogás`)}
+        ${tile("tabLog", "☰", "Napló", `${all.length} fogás`, newLog ? `${newLog} új fogás` : "")}
         ${tile("records", "🏆", "Rekordok", best ? `${esc(best.species)} ${esc(numFmt(best.weight_kg))} kg` : "rangsorok")}
-        ${tile("tabTrips", "⚑", "Túrák", tripSub + (ti.suggest ? ` · ${ti.suggest} javaslat` : ""))}
-        ${tile("tabGallery", "▦", "Galéria", `${withPh} fotós fogás`)}
+        ${tile("tabTrips", "⚑", "Túrák", tripSub + (ti.suggest ? ` · ${ti.suggest} javaslat` : ""), ti.news ? `${ti.news} túrán újdonság` : "")}
+        ${tile("tabGallery", "▦", "Galéria", `${withPh} fotós fogás`, newGal ? `${newGal} új` : "")}
         ${tile("tabStats", "▤", "Összesítők", `idén ${thisYear} fogás`)}
         ${viewer ? "" : tile("tabFamily", "👪", "Családtagok", "meghívás nézőként")}
         ${tile("menu", "⚙", "Beállítások", viewer ? "név, kilépés" : "értesítés, név, kilépés")}
@@ -1773,6 +1786,7 @@
     const size = [c.weight_kg != null ? `${numFmt(c.weight_kg)} kg` : "", c.length_cm != null ? `${numFmt(c.length_cm, 1)} cm` : ""]
       .filter(Boolean).join(", ");
     const tags = [
+      opts && opts.isNew ? `<span class="new-chip">ÚJ</span>` : "",
       c._pending ? `<span class="tag pending">Feltöltésre vár</span>` : "",
       c.released ? `<span class="tag">Visszaengedve</span>` : "",
       c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : "",
@@ -1816,6 +1830,9 @@
   }
 
   // Egy fogás tömör sora (névnap itt nincs, csak a lenyíló részletekben)
+  // Új fogás a naplóban: más rögzítette a napló utolsó megnyitása óta
+  const isNewLog = (c, live) => !!(news && !c._pending && news.isNew(c.created_at, "log", c.user_id, live));
+
   function rowHtml(c) {
     const nPh = photoCount(c);
     const p = tzParts(new Date(c.caught_at));
@@ -1827,7 +1844,7 @@
             ${nPh > 1 ? `<span class="crow-count">${nPh}</span>` : ""}
           </span>
           <span class="crow-main">
-            <span class="crow-species">${esc(c.species)}${c.released ? ` <span class="crow-tag">vissza</span>` : ""}${c._pending ? ` <span class="crow-tag pending">vár</span>` : ""}</span>
+            <span class="crow-species">${isNewLog(c) ? `<span class="new-chip">ÚJ</span>` : ""}${esc(c.species)}${c.released ? ` <span class="crow-tag">vissza</span>` : ""}${c._pending ? ` <span class="crow-tag pending">vár</span>` : ""}</span>
             <span class="crow-sub">${esc(anglerOf(c))} · ${esc(c.water)}</span>
           </span>
           <span class="crow-right">
@@ -1904,6 +1921,7 @@
     $("#logList").classList.toggle("hidden", rec);
     $("#recOut").classList.toggle("hidden", !rec);
     if (rec) { records.render(); return; }
+    if (news) news.enter("log");
 
     const list = filteredEntries();
     $("#logCount").textContent = `${list.length} fogás`;
@@ -1920,7 +1938,7 @@
         if (w && !w.classList.contains("open")) toggleRow(id);
       });
     } else {
-      out.innerHTML = list.map((c) => cardHtml(c)).join("");
+      out.innerHTML = list.map((c) => cardHtml(c, { isNew: isNewLog(c) })).join("");
     }
     applyHighlight();
     loadThumbs(out, list);
@@ -1930,6 +1948,7 @@
   // Galéria: fotó + halfaj, horgász, súly, vízterület
   // ------------------------------------------------------------------
   function renderGallery() {
+    if (news) news.enter("gallery");
     const withPhoto = allEntries().filter((c) => photoCount(c) > 0);
     const uniqSorted = (arr) => Array.from(new Set(arr.filter(Boolean))).sort((a, b) => a.localeCompare(b, "hu"));
     fillSelect($("#gYear"), yearOptions(withPhoto), "Év");
@@ -1947,6 +1966,7 @@
       <button type="button" class="g-tile" data-id="${esc(c.client_id)}" aria-label="${esc(captionOf(c))}">
         <img alt="" loading="lazy">
         ${photoCount(c) > 1 ? `<span class="photo-count" style="top:6px;bottom:auto">📷 ${photoCount(c)}</span>` : ""}
+        ${news && news.isNew(c.created_at, "gallery", c.user_id) ? `<span class="a-new left">ÚJ</span>` : ""}
         <div class="g-info">
           <div class="g-species">${esc(c.species)}</div>
           ${c.weight_kg != null ? `<div class="g-weight">${esc(numFmt(c.weight_kg))} kg</div>` : ""}

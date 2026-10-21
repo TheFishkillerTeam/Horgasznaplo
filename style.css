@@ -532,3 +532,20 @@ h3 { margin: 0 0 8px; font-size: 16px; }
 .char-count.near { color: var(--warn); font-weight: 600; }
 .char-count.full { color: var(--bad); font-weight: 600; }
 .char-count.idle { visibility: hidden; }
+
+/* Újdonságok jelölése (7. verzió) */
+.news-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: #e8590c; flex: none; vertical-align: middle; }
+.new-chip { display: inline-block; font-size: 10.5px; font-weight: 700; letter-spacing: .03em; line-height: 1; padding: 3px 6px; border-radius: 999px;
+  background: #e8590c; color: #fff; margin-right: 6px; vertical-align: 2px; }
+.trip-news { display: flex; align-items: center; gap: 6px; margin-top: 6px; font-size: 12.5px; font-weight: 600; color: #c2410c; }
+.trip-card.has-news { box-shadow: inset 3px 0 0 #e8590c; }
+.ht-news { display: flex; align-items: center; gap: 5px; font-size: 12px; font-weight: 600; color: #c2410c; max-width: 100%; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.home-tile.has-news { box-shadow: inset 0 0 0 1.5px #e8590c; }
+.trip-tabs button .news-dot { margin-left: 4px; vertical-align: 1px; }
+.trip-tabs button.active .news-dot { display: none; }
+.card.is-new { box-shadow: inset 3px 0 0 #e8590c; }
+.a-new { position: absolute; right: 6px; top: 6px; font-size: 10.5px; font-weight: 700; padding: 3px 7px; border-radius: 999px; background: #e8590c; color: #fff; }
+@media (prefers-color-scheme: dark) {
+  .trip-news, .ht-news { color: #ff8a4c; }
+}
+.a-new.left { right: auto; left: 6px; }
