@@ -28,9 +28,11 @@ window.TFTTrips = function (A) {
   };
 
   const RSVP = { yes: "Jön", maybe: "Talán", no: "Nem jön" };
-  const isAdmin = () => !!(state.me && state.me.is_admin);
-  const canEditTrip = (t) => t && (t.created_by === state.uid || isAdmin());
-  const own = (row) => row && (row.user_id === state.uid || isAdmin());
+  const isAdmin = () => !!(state.me && state.me.is_admin && state.me.role !== "viewer");
+  // Családtag (néző): mindent lát, de semmit nem módosíthat
+  const W = () => !(state.me && state.me.role === "viewer");
+  const canEditTrip = (t) => W() && t && (t.created_by === state.uid || isAdmin());
+  const own = (row) => W() && row && (row.user_id === state.uid || isAdmin());
   const pad2 = (n) => String(n).padStart(2, "0");
   const ms = (iso) => new Date(iso).getTime();
 
@@ -218,7 +220,7 @@ window.TFTTrips = function (A) {
         <div class="trips-head-row">
           <div><strong>Horgásztúra napló</strong>
             <div class="hint">A túra ideje alatt, a túra vízterületén rögzített fogások automatikusan a túrához kerülnek.</div></div>
-          <button type="button" class="btn primary small" data-trip-new ${T.missing ? "disabled" : ""}>＋ Új túra</button>
+          ${W() ? `<button type="button" class="btn primary small" data-trip-new ${T.missing ? "disabled" : ""}>＋ Új túra</button>` : ""}
         </div>
         <label class="search-box"><span aria-hidden="true">🔍</span>
           <input type="search" id="tripSearch" placeholder="Keresés: leírás, beszámoló, képaláírás, vendég…" value="${esc(T.q || "")}" autocomplete="off" enterkeyhint="search">
@@ -241,7 +243,7 @@ window.TFTTrips = function (A) {
     groups.past.sort((a, b) => ms(b.start_at) - ms(a.start_at));
     const sec = (title, list) => (list.length ? `<h3 class="sec-title">${title}</h3>${list.map(tripCardHtml).join("")}` : "");
     body.innerHTML = `
-      ${suggestHtml()}
+      ${W() ? suggestHtml() : ""}
       ${sec("Most zajlik", groups.active)}
       ${sec("Tervezett", groups.planned)}
       ${sec("Korábbi túrák", groups.past)}
@@ -649,13 +651,13 @@ window.TFTTrips = function (A) {
       const st = s === "past" ? (p.derived ? `<small>fogás alapján</small>` : "") :
         `<span class="rsvp ${p.rsvp}">${RSVP[p.rsvp]}</span>`;
       return `<li class="person"><span>${esc(name)} ${tag}</span><span class="person-r">${st}
-        ${p.id ? `<button type="button" class="x-btn" data-person-del="${esc(p.id)}" aria-label="${esc(name)} eltávolítása">✕</button>` : ""}</span></li>`;
+        ${p.id && W() ? `<button type="button" class="x-btn" data-person-del="${esc(p.id)}" aria-label="${esc(name)} eltávolítása">✕</button>` : ""}</span></li>`;
     };
     const visiblePpl = s === "past" ? ppl.filter((p) => p.rsvp !== "no") : ppl;
     const yes = ppl.filter((p) => p.rsvp === "yes").length, maybe = ppl.filter((p) => p.rsvp === "maybe").length;
     out.innerHTML = `
       ${t.note ? `<div class="card"><div class="pre">${esc(t.note)}</div></div>` : ""}
-      ${s !== "past" ? `<div class="card">
+      ${s !== "past" && W() ? `<div class="card">
         <strong>Részt veszel?</strong>
         <div class="rsvp-btns" role="group" aria-label="Jelentkezés">
           ${["yes", "maybe", "no"].map((k) => `<button type="button" class="btn small${mine && mine.rsvp === k ? " primary" : ""}" data-rsvp="${k}" aria-pressed="${!!(mine && mine.rsvp === k)}">${k === "yes" ? "Jövök" : k === "maybe" ? "Talán" : "Nem jövök"}</button>`).join("")}
@@ -663,7 +665,7 @@ window.TFTTrips = function (A) {
       <div class="card">
         <strong>Résztvevők</strong> <span class="hint">${s === "past" ? `${visiblePpl.length} fő` : `${yes} jön${maybe ? `, ${maybe} talán` : ""}`}</span>
         <ul class="people">${visiblePpl.map(pRow).join("") || `<li class="hint">Még nincs résztvevő.</li>`}</ul>
-        <div class="add-row">
+        ${W() ? `<div class="add-row">
           <select id="addMember" aria-label="Tag hozzáadása"><option value="">— tag hozzáadása —</option>
             ${addable.map((p) => `<option value="${esc(p.id)}">${esc(p.display_name)}</option>`).join("")}</select>
           <button type="button" class="btn small" data-add-member>Hozzáad</button>
@@ -671,7 +673,7 @@ window.TFTTrips = function (A) {
         <div class="add-row">
           <input id="addGuest" maxlength="40" placeholder="Vendég neve (nem TFT-tag)" aria-label="Vendég neve">
           <button type="button" class="btn small" data-add-guest>Vendég</button>
-        </div>
+        </div>` : ""}
       </div>
       ${cs.length ? `<div class="card trip-sum">
         <div><b>${scored.length}</b> fogás${sum ? ` · <b>${esc(kg(sum))}</b> összesen` : ""}</div>
@@ -927,11 +929,11 @@ window.TFTTrips = function (A) {
     const excluded = T.links.filter((l) => l.trip_id === t.id && !l.included).length;
     out.innerHTML = `
       <div class="card">
-        <div class="row-btns">
+        ${W() ? `<div class="row-btns">
           ${s !== "planned" ? `<button type="button" class="btn small primary" data-trip-catch="own">＋ Saját fogás</button>` : ""}
           ${s !== "planned" ? `<button type="button" class="btn small" data-trip-catch="guest" ${guests.length ? "" : "disabled"}>＋ Vendég fogása</button>` : ""}
           <button type="button" class="btn small" data-trip-pick>${T.pickMode ? "Kész" : "Fogás hozzáadása kézzel"}</button>
-        </div>
+        </div>` : ""}
         <p class="hint">${s === "planned" ? "A túra még nem kezdődött el. " : ""}Automatikusan ide kerül minden fogás, amely ${esc(rangeText(t))} között, a(z) ${esc(t.water)} vízterületen született.${guests.length || s === "planned" ? "" : " Vendégfogáshoz előbb vedd fel a vendéget a résztvevők közé (Áttekintés)."}${excluded ? ` ${excluded} fogást kézzel kivettetek.` : ""}</p>
         <p class="hint">A vendégek fogása versenyen kívüli: csak itt, a túranaplóban látszik, a naplóban és az összesítőkben nem.</p>
       </div>
@@ -942,7 +944,7 @@ window.TFTTrips = function (A) {
         <button type="button" data-trip-sort="time" class="${T.catchSort === "time" ? "active" : ""}" aria-pressed="${T.catchSort === "time"}">Időrend</button>
         <button type="button" data-trip-sort="rank" class="${T.catchSort === "rank" ? "active" : ""}" aria-pressed="${T.catchSort === "rank"}">Rangsor (súly)</button></div></div>` : ""}
       ${cs.length ? sortCatches(cs).map(({ c, rank }) => `<div class="card trip-catch">${rank ? `<div class="trip-rank">${rank === 1 ? "🥇" : rank === 2 ? "🥈" : rank === 3 ? "🥉" : rank + "."} helyezés</div>` : ""}${A.cardHtml(c, { inner: true })}
-        ${c._pending ? "" : `<div class="trip-catch-foot"><button type="button" class="link" data-link-out="${esc(c.client_id)}">Kivétel a túrából</button></div>`}</div>`).join("")
+        ${c._pending || !W() ? "" : `<div class="trip-catch-foot"><button type="button" class="link" data-link-out="${esc(c.client_id)}">Kivétel a túrából</button></div>`}</div>`).join("")
         : `<div class="card empty">Még nincs fogás ezen a túrán.</div>`}`;
     A.loadThumbs(out, cs);
   }
@@ -1013,11 +1015,11 @@ window.TFTTrips = function (A) {
     };
     out.innerHTML = `
       <div class="card">
-        <div class="photo-actions">
+        ${W() ? `<div class="photo-actions">
           <label class="btn small">📷 Fotó készítése<input type="file" accept="image/*" capture="environment" class="visually-hidden" data-album-pick></label>
           <label class="btn small">🖼 Galériából<input type="file" accept="image/*" multiple class="visually-hidden" data-album-pick></label>
-        </div>
-        <p class="hint">Bármilyen kép feltölthető (táj, tábor, csapat), mindegyikhez rövid memóval. A „Képek” blokkban a feltöltött képek, a „Fogások” blokkban a fogások 🐟 listaképei állnak, mindkettő időrendben. A 🐟 képre koppintva a fogás összes képe megnyílik.</p>
+        </div>` : ""}
+        <p class="hint">${W() ? "Bármilyen kép feltölthető (táj, tábor, csapat), mindegyikhez rövid memóval. " : ""}A „Képek” blokkban a feltöltött képek, a „Fogások” blokkban a fogások 🐟 listaképei állnak, mindkettő időrendben. A 🐟 képre koppintva a fogás összes képe megnyílik.</p>
         ${T.queue.length ? `<div class="queue">
           ${T.queue.map((q, i) => `<div class="q-item"><img src="${esc(q.url)}" alt="">
             <div><textarea data-q-memo="${i}" rows="2" maxlength="300" placeholder="Rövid memó (nem kötelező)">${esc(q.memo || "")}</textarea>
@@ -1184,12 +1186,12 @@ window.TFTTrips = function (A) {
           : `<div class="pre">${esc(p.body)}</div>
              ${own(p) ? `<div class="catch-actions"><button type="button" class="link" data-post-edit="${esc(p.id)}">Szerkesztés</button><button type="button" class="link btn-danger-link" data-post-del="${esc(p.id)}">Törlés</button></div>` : ""}`}
       </div>`).join("") : `<div class="card empty">Még nincs beszámoló. Írd meg, mi történt a túrán!</div>`}
-      <div class="card">
+      ${W() ? `<div class="card">
         <label class="field">Új beszámoló
           <textarea id="postNew" rows="4" maxlength="5000" placeholder="Mi történt ma? Időjárás, kapások, csalik, emlékezetes pillanatok…"></textarea>
         </label>
         <button type="button" class="btn primary small" data-post-send>Közzététel</button>
-      </div>`;
+      </div>` : ""}`;
   }
 
   async function sendPost() {

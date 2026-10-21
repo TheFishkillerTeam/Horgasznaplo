@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "5.2";
+  const APP_VERSION = "6.1";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -217,6 +217,10 @@
 
   let trips = null;     // Horgásztúra napló modul (trips.js)
   let records = null;   // Rekordlisták (records.js)
+  let family = null;    // Családtagok nézőként (family.js)
+  // Családtag (néző): mindent lát, de semmit nem módosíthat
+  const isViewer = () => !!(state.me && state.me.role === "viewer");
+  const viewerOk = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
 
   // ------------------------------------------------------------------
   // Nézetek
@@ -231,6 +235,8 @@
 
   // Nézetváltás. A kezdőlap a gyökér: onnan nyílik minden fül, a telefon „Vissza” gombja oda tér vissza.
   function showTab(tabId, opts) {
+    if (isViewer() && (tabId === "tabNew" || tabId === "tabFamily")) { toast("Nézőként ez nem érhető el."); tabId = "tabHome"; }
+    if (state.tab === "tabFamily" && tabId !== "tabFamily" && family) family.stopQr();
     const prev = state.tab;
     state.tab = tabId;
     $$(".tab").forEach((t) => t.classList.toggle("hidden", t.id !== tabId));
@@ -244,6 +250,7 @@
       } catch (_) { /* beágyazott nézetben nem elérhető */ }
     }
     if (tabId === "tabHome") renderHome();
+    if (tabId === "tabFamily" && family) family.render();
     if (tabId === "tabLog") { renderLog(); updatePushHint(); }
     if (tabId === "tabGallery") renderGallery();
     if (tabId === "tabStats") renderStats();
@@ -286,8 +293,12 @@
         signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate, placeLabel
       });
     }
+    if (typeof window.TFTFamily === "function") {
+      family = window.TFTFamily({ state, $, esc, dtFmt, toast, errText, nameOf, show, enterApp, showMembers, APP_URL, CFG });
+    }
     if (typeof window.TFTRecords === "function") {
-      records = window.TFTRecords({ $, esc, numFmt, dtFmt, tzParts, nameOf, allEntries, cardHtml, loadThumbs, trips });
+      records = window.TFTRecords({ $, esc, numFmt, dtFmt, tzParts, nameOf, allEntries, cardHtml, loadThumbs, trips,
+        dayRange, inDayRange, quickRange, dayInput, formatDayInput, parseDay });
     }
     updateNet();
 
@@ -311,6 +322,8 @@
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: "implicit" }
     });
 
+    state.inviteToken = family ? family.readToken() : null;
+
     state.sb.auth.onAuthStateChange((event, sess) => {
       if (event === "PASSWORD_RECOVERY") {
         state.recovery = true;
@@ -322,7 +335,7 @@
       if (event === "SIGNED_OUT") {
         state.uid = null; state.me = null;
         show("viewAuth");
-      } else if (sess && !state.uid) {
+      } else if (sess && !state.uid && !state.redeeming) {
         state.uid = sess.user.id;
         setTimeout(() => enterApp(), 0);
       }
@@ -340,6 +353,9 @@
     if (state.recovery) {
       if (session) state.uid = session.user.id;
       show("viewNewPassword");
+    } else if (state.inviteToken && family && navigator.onLine && await family.handleInvite(session).catch(() => false)) {
+      // Meghívó: a családtag a meghívó képernyőn folytatja
+      if (session) state.uid = session.user.id;
     } else if (session) {
       state.uid = session.user.id;
       await enterApp();
@@ -386,7 +402,9 @@
       show("viewPending");
       return;
     }
-    if (!state.me.approved) { show("viewPending"); return; }
+    if (isViewer()) {
+      if (!viewerOk(state.me)) { if (family) family.showExpired(); else show("viewPending"); return; }
+    } else if (!state.me.approved) { show("viewPending"); return; }
 
     enterMain();
     refreshData();
@@ -394,8 +412,8 @@
   }
 
   function enterMain() {
-    $("#menuUser").textContent = `${state.me.display_name || ""}${state.me.is_admin ? " (admin)" : ""}`;
-    $("#menuMembers").classList.toggle("hidden", !state.me.is_admin);
+    $("#menuUser").textContent = `${state.me.display_name || ""}${isViewer() ? " (néző)" : state.me.is_admin ? " (admin)" : ""}`;
+    $("#menuMembers").classList.toggle("hidden", !state.me.is_admin || isViewer());
     show("viewMain");
     resetForm();
     fillDatalists();
@@ -408,6 +426,14 @@
 
   async function refreshData() {
     if (!navigator.onLine || !state.sb) return;
+    // A saját profil frissítése (néző: lejárat, meghosszabbítás)
+    if (state.uid) {
+      try {
+        const me = await state.sb.from("profiles").select("*").eq("id", state.uid).maybeSingle();
+        if (me.data) { state.me = me.data; await idb.put("kv", me.data, "me"); }
+      } catch (_) { /* offline */ }
+      if (isViewer() && !viewerOk(state.me)) { if (family) family.showExpired(); return; }
+    }
     try {
       const pr = await state.sb.from("profiles").select("id, display_name, approved");
       if (pr.error) throw pr.error;
@@ -555,6 +581,11 @@
   }
 
   async function logout() {
+    if (isViewer() && !state.me.email_login) {
+      let anon = false;
+      try { const { data } = await state.sb.auth.getUser(); anon = !!(data && data.user && data.user.is_anonymous); } catch (_) { /* offline */ }
+      if (anon && !confirm("Gyors belépéssel (e-mail nélkül) vagy bent. Kijelentkezés után ezen a telefonon csak új meghívóval léphetsz be újra. Kijelentkezel?")) return;
+    }
     if (state.outbox.length && !confirm(`${state.outbox.length} fogás még nincs feltöltve. Kijelentkezés után is megmaradnak ezen a telefonon, és a következő belépéskor feltöltődnek. Kijelentkezel?`)) return;
     $("#menuPanel").classList.add("hidden");
     try { await state.sb.auth.signOut(); } catch (_) { /* offline */ }
@@ -1098,12 +1129,15 @@
     const ti = trips ? trips.homeInfo() : { active: [], planned: [], total: 0, suggest: 0 };
     const last = all[0];
     const first = (state.me.display_name || "").split(" ").slice(-1)[0];
+    const viewer = isViewer();
     const tile = (go, icon, title, sub) => `<button type="button" class="home-tile" data-go="${go}">
         <span class="ht-icon" aria-hidden="true">${icon}</span><span class="ht-title">${title}</span><span class="ht-sub">${sub}</span></button>`;
     const tripSub = ti.active.length ? `${ti.active.length} most zajlik` : ti.planned.length ? `${ti.planned.length} tervezett` : `${ti.total} túra`;
     box.innerHTML = `
       <div class="home-hello">Szia${first ? ", " + esc(first) : ""}!</div>
-      <button type="button" class="home-new" data-go="tabNew"><span aria-hidden="true">＋</span> Új fogás rögzítése</button>
+      ${viewer ? `<div class="card viewer-note">👀 <b>Nézőként</b> látod a naplót: mindent megnézhetsz, de nem módosíthatsz.
+          <small>Hozzáférés: ${state.me.viewer_until ? "lejár " + esc(dtFmt(state.me.viewer_until)) + "-kor" : "korlátlan"}</small></div>`
+        : `<button type="button" class="home-new" data-go="tabNew"><span aria-hidden="true">＋</span> Új fogás rögzítése</button>`}
       ${mine ? `<button type="button" class="card home-alert" data-home-sync>⟳ ${mine} fogás feltöltésre vár – koppints a küldéshez</button>` : ""}
       <div class="home-grid">
         ${tile("tabLog", "☰", "Napló", `${all.length} fogás`)}
@@ -1111,7 +1145,8 @@
         ${tile("tabTrips", "⚑", "Túrák", tripSub + (ti.suggest ? ` · ${ti.suggest} javaslat` : ""))}
         ${tile("tabGallery", "▦", "Galéria", `${withPh} fotós fogás`)}
         ${tile("tabStats", "▤", "Összesítők", `idén ${thisYear} fogás`)}
-        ${tile("menu", "⚙", "Beállítások", "értesítés, név, kilépés")}
+        ${viewer ? "" : tile("tabFamily", "👪", "Családtagok", "meghívás nézőként")}
+        ${tile("menu", "⚙", "Beállítások", viewer ? "név, kilépés" : "értesítés, név, kilépés")}
       </div>
       ${ti.active.concat(ti.planned.slice(0, 1)).map((t) => `
         <button type="button" class="card home-trip" data-trip-open="${esc(t.id)}">
@@ -1556,11 +1591,93 @@
 
   function filteredEntries() {
     const y = $("#fYear").value, u = $("#fUser").value, w = $("#fWater").value, s = $("#fSpecies").value;
+    const r = dayRange($("#fFrom").value, $("#fTo").value);
     return allEntries().filter((c) =>
       (!y || yearOf(c.caught_at) === y) &&
       (!u || c.user_id === u) &&
       (!w || c.water === w) &&
-      (!s || c.species === s));
+      (!s || c.species === s) &&
+      inDayRange(c, r)).sort(logSorter());
+  }
+
+  // Rendezés (egyszerre egy szempont); egyezésnél az idő dönt (legújabb elöl), súly nélküli fogás a végén
+  function logSorter() {
+    const mode = $("#fSort").value || "time_desc";
+    const t = (c) => c.caught_at;
+    const byTime = (a, b) => (t(a) < t(b) ? 1 : t(a) > t(b) ? -1 : 0);
+    const txt = (a, b) => a.localeCompare(b, "hu", { sensitivity: "base" });
+    if (mode === "time_asc") return (a, b) => -byTime(a, b);
+    if (mode === "kg_desc" || mode === "kg_asc") {
+      const dir = mode === "kg_desc" ? -1 : 1;
+      return (a, b) => {
+        const x = a.weight_kg == null ? null : Number(a.weight_kg), y = b.weight_kg == null ? null : Number(b.weight_kg);
+        if (x == null && y == null) return byTime(a, b);
+        if (x == null) return 1;
+        if (y == null) return -1;
+        return x !== y ? dir * (x - y) : byTime(a, b);
+      };
+    }
+    if (mode === "angler") return (a, b) => txt(anglerOf(a), anglerOf(b)) || byTime(a, b);
+    if (mode === "water") return (a, b) => txt(a.water || "", b.water || "") || byTime(a, b);
+    return byTime;
+  }
+
+  // ------------------------------------------------------------------
+  // Nap / időszak szűrő (Napló, Rekordok). Egy nap: csak a „tól” mező; időszak: mindkettő.
+  // ------------------------------------------------------------------
+  function parseDay(str) {
+    const m = String(str || "").trim().match(/^(\d{4})[.\-\/ ]?(\d{1,2})[.\-\/ ]?(\d{1,2})\.?$/);
+    if (!m) return null;
+    const d = new Date(+m[1], +m[2] - 1, +m[3]);
+    if (d.getFullYear() !== +m[1] || d.getMonth() !== +m[2] - 1 || d.getDate() !== +m[3]) return null;
+    return `${m[1]}-${pad2(+m[2])}-${pad2(+m[3])}`;
+  }
+  // {from, to} napkulcsok ("ÉÉÉÉ-HH-NN"), vagy null, ha nincs szűrés; {bad:true}, ha hibás
+  function dayRange(fromStr, toStr) {
+    const fs = String(fromStr || "").trim(), ts = String(toStr || "").trim();
+    if (!fs && !ts) return null;
+    const a = fs ? parseDay(fs) : null, b = ts ? parseDay(ts) : null;
+    if ((fs && !a) || (ts && !b)) return { bad: true };
+    let from = a || b, to = b || a;
+    if (from > to) [from, to] = [to, from];
+    return { from, to };
+  }
+  const dayKeyOf = (iso) => { const p = tzParts(new Date(iso)); return `${p.y}-${p.m}-${p.d}`; };
+  const inDayRange = (c, r) => !r || r.bad || (dayKeyOf(c.caught_at) >= r.from && dayKeyOf(c.caught_at) <= r.to);
+  const dayInput = (key) => key.replace(/-/g, ".");
+  function quickRange(code) {
+    const now = new Date();
+    const key = (d) => `${d.getFullYear()}-${pad2(d.getMonth() + 1)}-${pad2(d.getDate())}`;
+    const minus = (n) => { const d = new Date(now); d.setDate(d.getDate() - n); return d; };
+    if (code === "today") return { from: key(now), to: key(now) };
+    if (code === "yesterday") return { from: key(minus(1)), to: key(minus(1)) };
+    if (code === "7") return { from: key(minus(6)), to: key(now) };
+    if (code === "month") return { from: key(new Date(now.getFullYear(), now.getMonth(), 1)), to: key(now) };
+    return null;
+  }
+  function formatDayInput(el) {
+    let v = el.value.replace(/[^\d]/g, "").slice(0, 8);
+    if (v.length > 6) v = `${v.slice(0, 4)}.${v.slice(4, 6)}.${v.slice(6)}`;
+    else if (v.length > 4) v = `${v.slice(0, 4)}.${v.slice(4)}`;
+    el.value = v;
+  }
+  function onLogDateInput(e) {
+    formatDayInput(e.target);
+    const v = e.target.value;
+    if (v.length === 0 || v.length === 10) applyLogDate();
+  }
+  function applyLogDate() {
+    const r = dayRange($("#fFrom").value, $("#fTo").value);
+    $("#fFrom").classList.toggle("bad", !!(r && r.bad) && !!$("#fFrom").value && !parseDay($("#fFrom").value));
+    $("#fTo").classList.toggle("bad", !!(r && r.bad) && !!$("#fTo").value && !parseDay($("#fTo").value));
+    $("#fDateClear").classList.toggle("hidden", !r);
+    if (r && r.bad) return;
+    renderLog();
+  }
+  function setLogDate(r) {
+    $("#fFrom").value = r ? dayInput(r.from) : "";
+    $("#fTo").value = r && r.to !== r.from ? dayInput(r.to) : "";
+    applyLogDate();
   }
 
   async function signedUrl(path) {
@@ -1970,7 +2087,8 @@
     const sub = await currentPushSub().catch(() => null);
     $("#menuPush").textContent = sub ? "🔕 Értesítések kikapcsolása" : "🔔 Értesítések bekapcsolása";
     $("#menuPushTest").classList.toggle("hidden", !sub);
-    $("#menuPush").classList.toggle("hidden", !PUSH_OK && !IS_IOS);
+    $("#menuPush").classList.toggle("hidden", (!PUSH_OK && !IS_IOS) || isViewer());
+    if (isViewer()) $("#menuPushTest").classList.add("hidden");
     return !!sub;
   }
 
@@ -1978,7 +2096,7 @@
     let dismissed = false;
     try { dismissed = localStorage.getItem("pushHintHidden") === "1"; } catch (_) { /* nincs tároló */ }
     const on = await updatePushMenu();
-    $("#pushHint").classList.toggle("hidden", on || dismissed || (!PUSH_OK && !IS_IOS) || (typeof Notification !== "undefined" && Notification.permission === "denied"));
+    $("#pushHint").classList.toggle("hidden", isViewer() || on || dismissed || (!PUSH_OK && !IS_IOS) || (typeof Notification !== "undefined" && Notification.permission === "denied"));
   }
 
   async function enablePush() {
@@ -2196,16 +2314,19 @@
     const box = $("#memberList");
     box.innerHTML = `<p class="hint">Betöltés…</p>`;
     try {
-      const { data, error } = await state.sb.from("profiles").select("id, display_name, approved, is_admin, created_at")
+      const { data, error } = await state.sb.from("profiles").select("*")
         .order("approved").order("created_at", { ascending: false });
       if (error) throw error;
-      box.innerHTML = data.map((p) => `
+      const members = data.filter((p) => p.role !== "viewer");
+      const viewers = data.filter((p) => p.role === "viewer");
+      box.innerHTML = members.map((p) => `
         <div class="member">
           <div>${esc(p.display_name)}${p.is_admin ? " (admin)" : ""}
             <small>${p.approved ? "Jóváhagyva" : "Jóváhagyásra vár"} · regisztrált: ${esc(dtFmt(p.created_at))}</small>
           </div>
           ${p.id === state.uid ? "" : `<button type="button" class="btn small ${p.approved ? "danger" : "primary"}" data-member="${esc(p.id)}" data-ok="${p.approved ? "0" : "1"}">${p.approved ? "Letiltás" : "Jóváhagyás"}</button>`}
-        </div>`).join("") || `<p class="hint">Nincs tag.</p>`;
+        </div>`).join("") + (viewers.length && family ? `<h3 class="members-sub">Családtagok (nézők)</h3>${viewers.map((p) => family.viewerRowHtml(p)).join("")}` : "")
+        || `<p class="hint">Nincs tag.</p>`;
     } catch (e) {
       box.innerHTML = `<p class="msg err">${esc(errText(e))}</p>`;
     }
@@ -2299,6 +2420,11 @@
       showTab((e.state && e.state.tab) || "tabHome", { pop: true });
     });
     ["#fYear", "#fUser", "#fWater", "#fSpecies"].forEach((s) => $(s).addEventListener("change", renderLog));
+    ["#fFrom", "#fTo"].forEach((s) => { $(s).addEventListener("input", onLogDateInput); $(s).addEventListener("blur", applyLogDate); });
+    $("#fDateClear").addEventListener("click", () => setLogDate(null));
+    try { const so = localStorage.getItem("logSort"); if (so && $(`#fSort option[value="${so}"]`)) $("#fSort").value = so; } catch (_) { /* nincs tároló */ }
+    $("#fSort").addEventListener("change", () => { try { localStorage.setItem("logSort", $("#fSort").value); } catch (_) { /* nincs tároló */ } renderLog(); });
+    $("#fDateChips").addEventListener("click", (e) => { const b = e.target.closest("[data-dr]"); if (b) setLogDate(quickRange(b.dataset.dr)); });
     ["#sYear", "#sMode"].forEach((s) => $(s).addEventListener("change", renderStats));
     $("#btnExport").addEventListener("click", exportCsv);
     $("#btnSync").addEventListener("click", () => syncOutbox());
@@ -2338,6 +2464,11 @@
 
     // Értesítésre koppintva, ha az app már nyitva van: csak a címsor # része változik
     window.addEventListener("hashchange", () => {
+      if (/^#meghivo-/i.test(location.hash) && family) {
+        state.inviteToken = family.readToken();
+        state.sb.auth.getSession().then(({ data }) => family.handleInvite(data.session)).catch(() => {});
+        return;
+      }
       if (state.me && state.me.approved && !$("#viewMain").classList.contains("hidden")) { refreshData(); openCatchFromHash(); }
     });
     window.addEventListener("online", () => { updateNet(); syncOutbox(); refreshData(); });
@@ -2346,6 +2477,33 @@
       if (document.visibilityState === "visible" && state.uid) { syncOutbox(); refreshData(); }
     });
     setInterval(() => { if (state.outbox.length) syncOutbox(); }, 60000);
+    // Karakterszámláló minden korlátos szövegmezőhöz (beszámoló, leírás, megjegyzés, memó)
+    document.addEventListener("focusin", (e) => { if (isCounted(e.target)) updateCounter(e.target, true); });
+    document.addEventListener("input", (e) => { if (isCounted(e.target)) updateCounter(e.target, true); });
+    document.addEventListener("focusout", (e) => { if (isCounted(e.target)) updateCounter(e.target, false); });
+  }
+
+  const isCounted = (el) => el && el.tagName === "TEXTAREA" && el.maxLength > 0;
+  const fmtInt = (n) => n.toLocaleString("hu-HU");
+  function updateCounter(ta, active) {
+    let c = ta.nextElementSibling;
+    if (!c || !c.classList.contains("char-count")) {
+      c = document.createElement("div");
+      c.className = "char-count";
+      c.setAttribute("aria-live", "polite");
+      ta.insertAdjacentElement("afterend", c);
+    }
+    const max = ta.maxLength, used = ta.value.length, left = Math.max(0, max - used);
+    const near = left <= Math.max(20, Math.round(max * 0.1));
+    // Fókusz nélkül csak akkor marad látható, ha közel a korlát. A helye megmarad,
+    // hogy az alatta lévő gomb ne ugorjon el koppintás közben.
+    c.classList.toggle("idle", !active && !near);
+    c.classList.toggle("near", near && left > 0);
+    c.classList.toggle("full", left === 0);
+    const post = ta.id === "postNew" || ta.classList.contains("post-edit");
+    c.textContent = left === 0
+      ? `Elérted a korlátot (${fmtInt(max)} karakter).${post ? " A folytatást írd új beszámolóba." : ""}`
+      : `Még ${fmtInt(left)} karakter (${fmtInt(used)} / ${fmtInt(max)})`;
   }
 
   // Ha a böngésző még a régi index.html-t adja az új app.js mellé (gyorsítótár),
@@ -2362,7 +2520,7 @@
     try { if (window.caches) { const ks = await caches.keys(); await Promise.all(ks.map((k) => caches.delete(k))); } } catch (_) {}
     location.replace(location.pathname + "?v=" + Date.now() + location.hash);
   }
-  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid") || !document.getElementById("tabTrips") || !document.getElementById("recOut") || !document.getElementById("tabHome")) {
+  if (!document.getElementById("logViewSeg") || !document.getElementById("photoGrid") || !document.getElementById("tabTrips") || !document.getElementById("recOut") || !document.getElementById("tabHome") || !document.getElementById("viewRedeem")) {
     reloadFresh();
     return;
   }

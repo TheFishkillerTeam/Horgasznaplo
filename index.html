@@ -19,7 +19,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="32" height="32">
-      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v5.2</small></span>
+      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v6.1</small></span>
     </div>
     <div class="topbar-right">
       <span id="netBadge" class="badge" title="Kapcsolat állapota">—</span>
@@ -103,6 +103,44 @@
         <h2>Jóváhagyásra vár</h2>
         <p>A regisztráció sikeres. Amint az adminisztrátor jóváhagyja a tagságodat, használhatod az appot.</p>
         <button class="btn primary block" type="button" id="btnRecheck">Újraellenőrzés</button>
+        <button class="btn block" type="button" data-action="logout">Kijelentkezés</button>
+      </div>
+    </section>
+
+    <!-- Meghívó fogadása (családtag) -->
+    <section id="viewRedeem" class="view hidden">
+      <div class="card narrow">
+        <h2>Meghívót kaptál 🎣</h2>
+        <p>A TFT Horgásznaplóba szól a meghívód, <b>nézőként</b>: mindent megnézhetsz (fogások, fotók, túrák, rekordok), de nem rögzíthetsz és nem módosíthatsz semmit.</p>
+        <label class="field">A neved
+          <input id="rdName" maxlength="40" autocomplete="name" placeholder="pl. Tóth Kati">
+        </label>
+        <button class="btn primary block" type="button" id="btnRedeemQuick">Belépés</button>
+        <p class="hint" id="rdQuickHint">A gyors belépés ehhez a telefonhoz kötődik. Ha más eszközről is szeretnéd használni, lépj be e-mail-címmel.</p>
+        <button type="button" class="link" id="rdEmailToggle">Inkább e-mail-címmel lépek be / regisztrálok</button>
+        <div id="rdEmailBox" class="hidden">
+          <label class="field">E-mail-cím
+            <input id="rdEmail" type="email" autocomplete="email">
+          </label>
+          <label class="field">Jelszó (legalább 8 karakter)
+            <input id="rdPass" type="password" minlength="8" autocomplete="new-password">
+          </label>
+          <div class="row-btns">
+            <button class="btn primary" type="button" id="btnRedeemRegister">Regisztráció</button>
+            <button class="btn" type="button" id="btnRedeemLogin">Belépés meglévő fiókkal</button>
+          </div>
+        </div>
+        <p id="rdMsg" class="msg" role="status"></p>
+      </div>
+    </section>
+
+    <!-- Lejárt néző-hozzáférés -->
+    <section id="viewExpired" class="view hidden">
+      <div class="card narrow">
+        <h2>Lejárt a hozzáférésed</h2>
+        <p id="expText"></p>
+        <p class="hint">Kérd meg, aki meghívott, hogy hosszabbítsa meg, vagy kérj tőle új meghívót (QR-kód vagy link).</p>
+        <button class="btn primary block" type="button" id="btnExpRecheck">Újraellenőrzés</button>
         <button class="btn block" type="button" data-action="logout">Kijelentkezés</button>
       </div>
     </section>
@@ -252,6 +290,29 @@
             <select id="fWater" aria-label="Vízterület"></select>
             <select id="fSpecies" aria-label="Halfaj"></select>
           </div>
+          <div class="date-range" role="group" aria-label="Időszak">
+            <span class="dr-label">Nap / időszak</span>
+            <input id="fFrom" class="dr-in" inputmode="numeric" placeholder="ÉÉÉÉ.HH.NN" maxlength="10" autocomplete="off" aria-label="Dátumtól (egy napnál csak ezt töltsd ki)">
+            <span class="dr-sep">–</span>
+            <input id="fTo" class="dr-in" inputmode="numeric" placeholder="(ig)" maxlength="10" autocomplete="off" aria-label="Dátumig">
+            <button type="button" class="x-btn hidden" id="fDateClear" aria-label="Időszak törlése">✕</button>
+          </div>
+          <div class="chips dr-chips" id="fDateChips">
+            <button type="button" class="chip" data-dr="today">Ma</button>
+            <button type="button" class="chip" data-dr="yesterday">Tegnap</button>
+            <button type="button" class="chip" data-dr="7">Elmúlt 7 nap</button>
+            <button type="button" class="chip" data-dr="month">E hónap</button>
+          </div>
+          <label class="sort-row"><span>Rendezés</span>
+            <select id="fSort" aria-label="Rendezés">
+              <option value="time_desc">Idő – legújabb elöl</option>
+              <option value="time_asc">Idő – legrégebbi elöl</option>
+              <option value="kg_desc">Súly – legnagyobb elöl</option>
+              <option value="kg_asc">Súly – legkisebb elöl</option>
+              <option value="angler">Horgász – A–Z</option>
+              <option value="water">Vízterület – A–Z</option>
+            </select>
+          </label>
           </div>
           <div class="filters-foot">
             <span id="logCount" class="hint"></span>
@@ -265,6 +326,11 @@
         </div>
         <div id="logList"></div>
         <div id="recOut" class="hidden"></div>
+      </div>
+
+      <!-- CSALÁDTAGOK (meghívás, nézők) -->
+      <div id="tabFamily" class="tab hidden">
+        <div id="familyOut"></div>
       </div>
 
       <!-- TÚRÁK (Horgásztúra napló) -->
@@ -367,7 +433,9 @@
   <script src="config.js"></script>
   <script src="supabase.js"></script>
   <script src="vendor/leaflet/leaflet.js"></script>
+  <script src="vendor/qrcode/qrcode.js"></script>
   <script src="trips.js"></script>
+  <script src="family.js"></script>
   <script src="records.js"></script>
   <script src="app.js"></script>
 </body>

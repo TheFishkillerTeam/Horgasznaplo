@@ -15,7 +15,7 @@ window.TFTRecords = function (A) {
   const SEASONS = [["Tavasz", [3, 4, 5]], ["Nyár", [6, 7, 8]], ["Ősz", [9, 10, 11]], ["Tél", [12, 1, 2]]];
   const TOP = 10;
 
-  const R = { f: {}, mode: "weight", bySpecies: true, showAll: {}, open: new Set(), pick: null };
+  const R = { f: {}, range: null, mode: "weight", bySpecies: true, showAll: {}, open: new Set(), pick: null };
   KEYS.forEach((k) => { R.f[k] = []; });
   try {
     const s = JSON.parse(localStorage.getItem("recState") || "null");
@@ -23,9 +23,10 @@ window.TFTRecords = function (A) {
       KEYS.forEach((k) => { if (Array.isArray(s.f && s.f[k])) R.f[k] = s.f[k]; });
       if (s.mode === "count" || s.mode === "weight") R.mode = s.mode;
       if (typeof s.bySpecies === "boolean") R.bySpecies = s.bySpecies;
+      if (s.range && s.range.from && s.range.to) R.range = s.range;
     }
   } catch (_) { /* nincs tároló */ }
-  const save = () => { try { localStorage.setItem("recState", JSON.stringify({ f: R.f, mode: R.mode, bySpecies: R.bySpecies })); } catch (_) { /* nincs tároló */ } };
+  const save = () => { try { localStorage.setItem("recState", JSON.stringify({ f: R.f, range: R.range, mode: R.mode, bySpecies: R.bySpecies })); } catch (_) { /* nincs tároló */ } };
 
   // Egy fogás értéke az adott szűrő szerint (a hónap 1–12, a túra több is lehet)
   function valuesOf(c, key) {
@@ -38,7 +39,13 @@ window.TFTRecords = function (A) {
     return [];
   }
   const passes = (c, key) => !R.f[key].length || valuesOf(c, key).some((v) => R.f[key].includes(v));
-  const filtered = (except) => A.allEntries().filter((c) => KEYS.every((k) => k === except || passes(c, k)));
+  const filtered = (except) => A.allEntries().filter((c) => KEYS.every((k) => k === except || passes(c, k)) && (except === "range" || A.inDayRange(c, R.range)));
+  const MONAB = ["jan.", "febr.", "márc.", "ápr.", "máj.", "jún.", "júl.", "aug.", "szept.", "okt.", "nov.", "dec."];
+  function rangeText(r) {
+    if (!r) return "mind";
+    const f = (k) => { const [y, m, d] = k.split("-"); return `${y === String(new Date().getFullYear()) ? "" : y + ". "}${MONAB[+m - 1]} ${+d}.`; };
+    return r.from === r.to ? f(r.from) : `${f(r.from)} – ${f(r.to)}`;
+  }
 
   function labelOf(key, v) {
     if (key === "user") return A.nameOf(v);
@@ -75,7 +82,7 @@ window.TFTRecords = function (A) {
     const out = $("#recOut");
     if (!out) return;
     const list = filtered();
-    const anyFilter = KEYS.some((k) => R.f[k].length);
+    const anyFilter = KEYS.some((k) => R.f[k].length) || !!R.range;
     $("#logCount").textContent = `${list.length} fogás`;
     let body = "";
     if (R.mode === "weight") {
@@ -115,6 +122,8 @@ window.TFTRecords = function (A) {
         <div class="rec-filters">
           ${KEYS.map((k) => `<button type="button" class="fbtn${R.f[k].length ? " on" : ""}" data-rf="${k}" aria-haspopup="dialog">
             <small>${LABEL[k]}</small><span>${esc(filterText(k))}</span></button>`).join("")}
+          <button type="button" class="fbtn fbtn-wide${R.range ? " on" : ""}" data-rf="range" aria-haspopup="dialog">
+            <small>Nap / időszak</small><span>${esc(rangeText(R.range))}</span></button>
         </div>
         <div class="rec-opts">
           <div class="seg2" role="group" aria-label="Rangsor típusa">
@@ -168,7 +177,26 @@ window.TFTRecords = function (A) {
   }
 
   // ---- Többes választó (alsó lap) ----
+  function openRange() {
+    R.pick = { key: "range" };
+    $("#pickTitle").textContent = "Nap / időszak";
+    $("#pickQuick").innerHTML = `<button type="button" class="chip" data-rq="today">Ma</button><button type="button" class="chip" data-rq="yesterday">Tegnap</button>
+      <button type="button" class="chip" data-rq="7">Elmúlt 7 nap</button><button type="button" class="chip" data-rq="month">E hónap</button>`;
+    $("#pickQuick").classList.remove("hidden");
+    const r = R.range;
+    $("#pickList").innerHTML = `
+      <div class="date-range sheet-range">
+        <input id="rFrom" class="dr-in" inputmode="numeric" placeholder="ÉÉÉÉ.HH.NN" maxlength="10" autocomplete="off" aria-label="Dátumtól" value="${r ? A.dayInput(r.from) : ""}">
+        <span class="dr-sep">–</span>
+        <input id="rTo" class="dr-in" inputmode="numeric" placeholder="(ig)" maxlength="10" autocomplete="off" aria-label="Dátumig" value="${r && r.to !== r.from ? A.dayInput(r.to) : ""}">
+      </div>
+      <p class="hint">Egy naphoz csak az első mezőt töltsd ki; időszakhoz mindkettőt. Az időszak a többi szűrővel együtt érvényes.</p>
+      <p class="msg err" id="rMsg"></p>`;
+    $("#pickSheet").classList.remove("hidden");
+  }
+
   function openPick(key) {
+    if (key === "range") return openRange();
     const base = filtered(key);
     const counts = new Map();
     base.forEach((c) => valuesOf(c, key).forEach((v) => counts.set(v, (counts.get(v) || 0) + 1)));
@@ -189,6 +217,13 @@ window.TFTRecords = function (A) {
     $("#pickSheet").classList.remove("hidden");
   }
   function closePick(apply) {
+    if (apply && R.pick && R.pick.key === "range") {
+      const r = A.dayRange($("#rFrom").value, $("#rTo").value);
+      if (r && r.bad) { $("#rMsg").textContent = "A dátumot így add meg: ÉÉÉÉ.HH.NN (pl. 2026.09.12)."; return; }
+      R.range = r; R.showAll = {}; save(); render();
+      R.pick = null; $("#pickSheet").classList.add("hidden");
+      return;
+    }
     if (apply && R.pick) {
       R.f[R.pick.key] = Array.from($("#pickList").querySelectorAll("input:checked")).map((i) => i.value);
       R.showAll = {};
@@ -205,7 +240,12 @@ window.TFTRecords = function (A) {
     if (g("#pickSheet")) {
       if (e.target.id === "pickSheet") return closePick(true);
       if (g("#btnPickOk")) return closePick(true);
-      if (g("#btnPickNone")) { $("#pickList").querySelectorAll("input").forEach((i) => { i.checked = false; }); return; }
+      if (g("#btnPickNone")) { $("#pickList").querySelectorAll("input").forEach((i) => { if (i.type === "checkbox") i.checked = false; else i.value = ""; }); return; }
+      if ((el = g("[data-rq]"))) {
+        const q = A.quickRange(el.dataset.rq);
+        $("#rFrom").value = A.dayInput(q.from); $("#rTo").value = q.to !== q.from ? A.dayInput(q.to) : "";
+        return;
+      }
       if ((el = g("[data-season]"))) {
         const ms = el.dataset.season.split(",");
         const inputs = Array.from($("#pickList").querySelectorAll("input"));
@@ -217,11 +257,12 @@ window.TFTRecords = function (A) {
     if (!g("#recOut")) return;
     if ((el = g("[data-rf]"))) return openPick(el.dataset.rf);
     if ((el = g("[data-rmode]"))) { R.mode = el.dataset.rmode; save(); render(); return; }
-    if (g("[data-rclear]")) { KEYS.forEach((k) => { R.f[k] = []; }); R.showAll = {}; save(); render(); return; }
+    if (g("[data-rclear]")) { KEYS.forEach((k) => { R.f[k] = []; }); R.range = null; R.showAll = {}; save(); render(); return; }
     if ((el = g("[data-rmore]"))) { R.showAll[el.dataset.rmore] = !R.showAll[el.dataset.rmore]; render(); return; }
     if ((el = g("[data-rrow]"))) return openRow(el.dataset.rrow, false);
   }
   document.addEventListener("click", onClick);
+  document.addEventListener("input", (e) => { if (e.target.id === "rFrom" || e.target.id === "rTo") A.formatDayInput(e.target); });
   document.addEventListener("change", (e) => {
     if (e.target.matches("[data-rbysp]")) { R.bySpecies = e.target.checked; R.showAll = {}; save(); render(); }
   });
