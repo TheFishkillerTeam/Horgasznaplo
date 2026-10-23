@@ -10,7 +10,17 @@ window.TFTFamily = function (A) {
   "use strict";
   const { state, $, esc, dtFmt, toast, errText } = A;
 
-  const F = { qr: null, timer: null, poll: null, viewers: [] };
+  const F = { qr: null, timer: null, poll: null, listPoll: null, viewers: [], invites: [], usedSeen: null, showExp: {} };
+
+  // Lejárt elemek alapból rejtve; egy gombbal megjeleníthetők (listánként, a fül bezárásáig)
+  function withExpired(key, items, active, row, empty) {
+    const on = items.filter(active), off = items.filter((x) => !active(x));
+    const show = !!F.showExp[key];
+    const list = show ? on.concat(off) : on;
+    return (list.length ? list.map(row).join("") : `<p class="hint">${empty}</p>`) +
+      (off.length ? `<button type="button" class="link exp-toggle" data-show-exp="${key}">${show ? "Lejártak elrejtése" : `Lejártak megjelenítése (${off.length})`}</button>` : "");
+  }
+  const viewerListHtml = (key, list, empty) => withExpired(key, list, viewerValid, viewerRowHtml, empty);
   const isViewer = () => !!(state.me && state.me.role === "viewer");
   const isAdmin = () => !!(state.me && state.me.is_admin && state.me.role !== "viewer");
   const viewerValid = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
@@ -154,10 +164,97 @@ window.TFTFamily = function (A) {
         <div id="invPanel"></div>
       </div>
       <div class="card">
+        <h3>Elküldött meghívók</h3>
+        <p class="hint">Az elmúlt 14 nap ${adm ? "meghívói" : "meghívóid"}: itt látod, beváltották-e. A még be nem váltott meghívó visszavonható.</p>
+        <div id="invList"><p class="hint">Betöltés…</p></div>
+      </div>
+      <div class="card">
         <h3>${adm ? "Családtagok (nézők)" : "Meghívottaim"}</h3>
         <div id="viewerList"><p class="hint">Betöltés…</p></div>
       </div>`;
-    loadViewers();
+    F.usedSeen = null;
+    await loadViewers();
+    await loadInvites();
+    // Amíg a Családtagok fül nyitva van, félpercenként frissül (beváltás visszajelzése)
+    clearInterval(F.listPoll);
+    F.listPoll = setInterval(() => {
+      if (!$("#invList") || $("#tabFamily").classList.contains("hidden")) { clearInterval(F.listPoll); F.listPoll = null; return; }
+      if (document.visibilityState === "visible" && navigator.onLine) loadInvites();
+    }, 15000);
+  }
+
+  // ---- Elküldött meghívók: függőben / beváltva / visszavonva / lejárt ----
+  const DAY = 86400000;
+  function inviteState(i) {
+    if (i.used_at) return "used";
+    if (i.revoked_at) return "revoked";
+    if (new Date(i.expires_at).getTime() <= Date.now()) return "expired";
+    return "pending";
+  }
+  const viewerName = (id) => ((F.viewers.find((v) => v.id === id) || {}).display_name) || A.nameOf(id);
+
+  async function loadInvites() {
+    const box = $("#invList");
+    if (!box) return;
+    try {
+      const { data, error } = await state.sb.from("invites").select("*");
+      if (error) throw error;
+      const from = Date.now() - 14 * DAY;
+      F.invites = (data || []).filter((i) => (isAdmin() || i.created_by === state.uid) && new Date(i.created_at).getTime() >= from)
+        .sort((a, b) => String(b.created_at).localeCompare(String(a.created_at))).slice(0, 20);
+      // Új beváltás a fül megnyitása óta → visszajelzés
+      const used = F.invites.filter((i) => i.used_at).map((i) => i.token);
+      if (F.usedSeen) {
+        const fresh = F.invites.filter((i) => i.used_at && !F.usedSeen.has(i.token));
+        if (fresh.length) {
+          await loadViewers();
+          fresh.forEach((i) => toast(`✓ ${viewerName(i.used_by)} beváltotta a meghívót.`, 5000));
+        }
+      }
+      F.usedSeen = new Set(used);
+      renderInvites();
+    } catch (e) {
+      box.innerHTML = `<p class="msg err">${esc(errText(e))}</p>`;
+    }
+  }
+
+  function renderInvites() {
+    const box = $("#invList");
+    if (!box) return;
+    box.innerHTML = F.invites.length
+      ? withExpired("invites", F.invites, (i) => ["pending", "used"].includes(inviteState(i)), inviteRowHtml, "Nincs függő vagy beváltott meghívó.")
+      : `<p class="hint">Az elmúlt 14 napban nem volt meghívó.</p>`;
+  }
+
+  function inviteRowHtml(i) {
+    const st = inviteState(i);
+    const tok = esc(i.token);
+    const what = `${i.channel === "qr" ? "📱 QR-kód" : "✉️ Link"} · ${esc(dtFmt(i.created_at))}`;
+    const who = isAdmin() && i.created_by !== state.uid ? ` · küldte: ${esc(A.nameOf(i.created_by))}` : "";
+    const status = {
+      used: `<span class="inv-st used">✓ Beváltotta: <b>${esc(viewerName(i.used_by))}</b> · ${esc(dtFmt(i.used_at))}</span>`,
+      pending: `<span class="inv-st pending">⏳ Még nincs beváltva · érvényes: ${esc(dtFmt(i.expires_at))}-ig</span>`,
+      revoked: `<span class="inv-st">Visszavonva · ${esc(dtFmt(i.revoked_at))}</span>`,
+      expired: `<span class="inv-st">Lejárt, nem használták</span>`
+    }[st];
+    const acts = st === "pending" ? `<div class="vr-acts">
+        ${i.channel === "link" ? `<button type="button" class="btn small" data-ia="share" data-tok="${tok}">Link újraküldése</button>` : ""}
+        <button type="button" class="btn small danger" data-ia="cancel" data-tok="${tok}">Visszavonás</button></div>` : "";
+    return `<div class="inv-row ${st}">
+      <div class="vr-main"><span>${what}${who}</span>
+        <small>Hozzáférés: ${esc(durText(i.access_minutes))}</small>${status}</div>${acts}</div>`;
+  }
+
+  async function cancelInvite(tok) {
+    if (!confirm("Visszavonod a meghívót? Utána a linkkel / QR-kóddal nem lehet belépni.")) return;
+    try {
+      const { error } = await state.sb.rpc("cancel_invite", { tok });
+      if (error) throw error;
+      toast("Meghívó visszavonva.");
+      const qr = F.qr && F.qr === tok;
+      if (qr) { stopQr(); $("#invPanel").innerHTML = ""; }
+      loadInvites();
+    } catch (e) { toast(errText(e), 5000); }
   }
 
   async function loadViewers() {
@@ -168,7 +265,7 @@ window.TFTFamily = function (A) {
       if (error) throw error;
       F.viewers = (data || []).filter((p) => isAdmin() || p.invited_by === state.uid)
         .sort((a, b) => (viewerValid(b) ? 1 : 0) - (viewerValid(a) ? 1 : 0) || String(b.invited_at || "").localeCompare(String(a.invited_at || "")));
-      box.innerHTML = F.viewers.length ? F.viewers.map((p) => viewerRowHtml(p)).join("")
+      box.innerHTML = F.viewers.length ? viewerListHtml("family", F.viewers, "Nincs aktív hozzáférésű néző.")
         : `<p class="hint">${isAdmin() ? "Még nincs néző." : "Még nem hívtál meg senkit."}</p>`;
     } catch (e) {
       box.innerHTML = `<p class="msg err">${esc(errText(e))}</p>`;
@@ -221,6 +318,8 @@ window.TFTFamily = function (A) {
     stopQr();
     const inv = await createInvite("qr");
     if (!inv) return;
+    F.qr = inv.token;
+    loadInvites();
     const url = inviteUrl(inv.token);
     const panel = $("#invPanel");
     let img = "";
@@ -259,22 +358,25 @@ window.TFTFamily = function (A) {
         $("#qrStatus").className = "msg ok";
         $("#qrStatus").textContent = `✓ ${who} belépett nézőként.`;
         const im = document.querySelector(".qr-img"); if (im) im.classList.add("used");
-        loadViewers();
+        await loadViewers();
+        if (F.usedSeen) F.usedSeen.add(inv.token);   // itt már jeleztük, a lista ne jelezze újra
+        loadInvites();
       }
     }, 4000);
   }
 
-  async function shareLink() {
+  async function shareLink(existing) {
     stopQr();
-    const inv = await createInvite("link");
+    const inv = existing || await createInvite("link");
     if (!inv) return;
     const url = inviteUrl(inv.token);
     const me = (state.me && state.me.display_name) || "Egy tag";
     const club = (A.CFG.CLUB_NAME || "TFT");
     const subject = `Meghívó – ${club} Horgásznapló`;
-    const text = `Szia! ${me} meghívott a ${club} Horgásznaplójába nézőként (${durText(inv.access_minutes)}). Itt láthatod a fogásainkat, fotóinkat és túráinkat.\n\nA meghívó 48 óráig érvényes és egyszer használható – nyisd meg ezt a linket a telefonodon:\n${url}`;
+    const valid = existing ? `${dtFmt(inv.expires_at)}-ig érvényes` : "48 óráig érvényes";
+    const text = `Szia! ${me} meghívott a ${club} Horgásznaplójába nézőként (${durText(inv.access_minutes)}). Itt láthatod a fogásainkat, fotóinkat és túráinkat.\n\nA meghívó ${valid} és egyszer használható – nyisd meg ezt a linket a telefonodon:\n${url}`;
     $("#invPanel").innerHTML = `<div class="link-box">
-        <p class="hint">Meghívó link (48 óráig érvényes, egyszer használható):</p>
+        <p class="hint">Meghívó link (${esc(valid)}, egyszer használható):</p>
         <input class="link-in" readonly value="${esc(url)}" aria-label="Meghívó link">
         <div class="row-btns">
           <button type="button" class="btn small" data-inv="copy">Link másolása</button>
@@ -286,7 +388,7 @@ window.TFTFamily = function (A) {
     if (navigator.share) {
       try { await navigator.share({ title: subject, text }); } catch (e) { if (e && e.name !== "AbortError") toast(errText(e)); }
     }
-    loadViewers();
+    loadInvites();
   }
 
   async function copyLink() {
@@ -301,10 +403,24 @@ window.TFTFamily = function (A) {
     const g = (sel) => e.target.closest(sel);
     let el;
     if ((el = g("[data-va]"))) { setAccess(el.dataset.vid, el.dataset.va); return; }
+    if ((el = g("[data-show-exp]"))) {
+      const k = el.dataset.showExp;
+      F.showExp[k] = !F.showExp[k];
+      if (k === "family") loadViewers();
+      else if (k === "invites") renderInvites();
+      else if (k === "members") A.showMembers();
+      return;
+    }
+    if ((el = g("[data-ia]"))) {
+      const inv = F.invites.find((i) => i.token === el.dataset.tok);
+      if (el.dataset.ia === "cancel") cancelInvite(el.dataset.tok);
+      else if (el.dataset.ia === "share" && inv) { shareLink(inv); window.scrollTo({ top: 0, behavior: "smooth" }); }
+      return;
+    }
     if ((el = g("[data-inv]"))) {
       const k = el.dataset.inv;
       if (k === "qr") showQr();
-      else if (k === "link") shareLink();
+      else if (k === "link") shareLink(null);
       else if (k === "copy") copyLink();
       else if (k === "close") { stopQr(); $("#invPanel").innerHTML = ""; }
       return;
@@ -317,5 +433,5 @@ window.TFTFamily = function (A) {
   $("#btnExpRecheck").addEventListener("click", () => A.enterApp());
   setInterval(checkExpiry, 30000);
 
-  return { readToken, handleInvite, showExpired, checkExpiry, render, stopQr, viewerRowHtml, viewerValid, isViewer };
+  return { readToken, handleInvite, showExpired, checkExpiry, render, stopQr, viewerRowHtml, viewerListHtml, viewerValid, isViewer };
 };

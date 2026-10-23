@@ -1,4 +1,4 @@
-# Horgásznapló – 7.0
+# Horgásznapló – 7.3
 
 Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes app (PWA) Android és iPhone telefonra.
 
@@ -15,6 +15,9 @@ Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes 
 - Egyéni belépés, admin általi tagjóváhagyás
 - Karakterszámláló a korlátos szövegmezőknél (beszámoló, leírás, megjegyzés, memó)
 - Újdonságok jelölése: a legutóbbi megnyitás óta mások által hozzáadott vagy módosított fogások, túrák, beszámolók, fotók, jelentkezések (minden eszközön egyező állapot)
+- Elküldött meghívók listája: beváltva / függőben / lejárt / visszavont, visszavonás és link-újraküldés
+- Visszaszámláló a tervezett túra indulásáig (kezdőlap Túrák csempéje, túralista)
+- Lejárt nézők és meghívók alapból rejtve, egy gombbal megjeleníthetők
 - Családtagok nézőként: meghívás képernyőn megjelenő QR-kóddal vagy linkkel (e-mail, üzenet); tag 1 napra, admin tetszőleges időre vagy korlátlanul; a nézők csak megtekinthetnek, értesítést nem kapnak
 
 ## Fájlok
@@ -34,6 +37,7 @@ Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes 
 | `supabase_frissites_v3.sql` | Frissítés a 2. verzióról a 3.-ra (Supabase SQL Editor) |
 | `supabase_frissites_v5.sql` | Frissítés a 4. verzióról az 5.0-ra – borítókép, képek készítési ideje (Supabase SQL Editor) |
 | `supabase_frissites_v4.sql` | Frissítés a 3. verzióról a 4.-re – túranapló (Supabase SQL Editor) |
+| `supabase_frissites_v7_1.sql` | Frissítés a 7.0 verzióról a 7.1-re – meghívó visszavonása (Supabase SQL Editor) |
 | `supabase_frissites_v7.sql` | Frissítés a 6.x verzióról a 7.0-ra – újdonságok jelölése (Supabase SQL Editor) |
 | `supabase_frissites_v6.sql` | Frissítés az 5.x verzióról a 6.0-ra – családtagok nézőként (Supabase SQL Editor) |
 | `supabase/functions/ertesites/index.ts` | Push-értesítő szolgáltatás (Supabase Edge Function, neve: `ertesites`) |

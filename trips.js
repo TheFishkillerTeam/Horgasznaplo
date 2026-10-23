@@ -242,6 +242,7 @@ window.TFTTrips = function (A) {
             <span>👥 ${yes}</span><span>📷 ${nPh}</span><span>📝 ${nPo}</span>
             ${s !== "past" ? `<span class="trip-me">${mine ? "Te: " + esc(RSVP[mine.rsvp]) : "Még nem jelezted"}</span>` : ""}
           </span>
+          ${s === "planned" && A.countdownHtml ? A.countdownHtml(t.start_at) : ""}
           ${newsLine(nw)}
         </span>
       </button>`;

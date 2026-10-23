@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "7.0";
+  const APP_VERSION = "7.3";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -297,7 +297,7 @@
       trips = window.TFTTrips({ news,
         state, $, esc, numFmt, dtFmt, tzParts, toast, errText, idb, uuid, TZ, CFG, APP_URL,
         nameOf, anglerOf, everyEntry, cardHtml, loadThumbs, photoCount, catchPhotoPaths, captionOf,
-        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate, placeLabel
+        signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate, placeLabel, countdownHtml
       });
     }
     if (typeof window.TFTFamily === "function") {
@@ -1127,6 +1127,34 @@
   // ------------------------------------------------------------------
   // Kezdőlap (vezérlőfelület)
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Visszaszámláló a tervezett túra kezdéséig (7.2): másodpercenként frissül
+  // ------------------------------------------------------------------
+  function cdText(iso) {
+    const left = Math.max(0, Math.floor((new Date(iso).getTime() - Date.now()) / 1000));
+    const d = Math.floor(left / 86400), h = Math.floor(left / 3600) % 24, m = Math.floor(left / 60) % 60, sec = left % 60;
+    const hms = [h, m, sec].map((x) => String(x).padStart(2, "0")).join(":");
+    return { left, text: d ? `${d} nap ${hms}` : hms };
+  }
+  function countdownHtml(iso, cls) {
+    return `<span class="cd${cls ? " " + cls : ""}" data-cd="${esc(iso)}"><span class="cd-l">Indulásig:</span> <span class="cd-v">${esc(cdText(iso).text)}</span></span>`;
+  }
+  function tickCountdowns() {
+    let started = false;
+    document.querySelectorAll("[data-cd]").forEach((el) => {
+      if (!el.offsetParent) return;          // nem látható nézet
+      const c = cdText(el.dataset.cd);
+      const v = el.querySelector(".cd-v");
+      if (v && v.textContent !== c.text) v.textContent = c.text;
+      if (!c.left && !el.dataset.done) { el.dataset.done = "1"; started = true; }
+    });
+    // Elindult a túra: a kártyák „Most zajlik” állapotra váltanak
+    if (started) {
+      if (state.tab === "tabHome") renderHome();
+      if (state.tab === "tabTrips" && trips) trips.render();
+    }
+  }
+
   function renderHome() {
     const box = $("#homeOut");
     if (!box || !state.me) return;
@@ -1140,8 +1168,8 @@
     const last = all[0];
     const first = (state.me.display_name || "").split(" ").slice(-1)[0];
     const viewer = isViewer();
-    const tile = (go, icon, title, sub, fresh) => `<button type="button" class="home-tile${fresh ? " has-news" : ""}" data-go="${go}">
-        <span class="ht-icon" aria-hidden="true">${icon}</span><span class="ht-title">${title}</span><span class="ht-sub">${sub}</span>${fresh ? `<span class="ht-news"><span class="news-dot" aria-hidden="true"></span>${fresh}</span>` : ""}</button>`;
+    const tile = (go, icon, title, sub, fresh, extra) => `<button type="button" class="home-tile${fresh ? " has-news" : ""}" data-go="${go}">
+        <span class="ht-icon" aria-hidden="true">${icon}</span><span class="ht-title">${title}</span><span class="ht-sub">${sub}</span>${extra || ""}${fresh ? `<span class="ht-news"><span class="news-dot" aria-hidden="true"></span>${fresh}</span>` : ""}</button>`;
     // Újdonságok a legutóbbi megnyitás óta (mások által)
     const newLog = news && news.ok() ? all.filter((c) => isNewLog(c, true)).length : 0;
     const newGal = news && news.ok() ? all.filter((c) => photoCount(c) > 0 && news.isNew(c.created_at, "gallery", c.user_id, true)).length : 0;
@@ -1155,7 +1183,8 @@
       <div class="home-grid">
         ${tile("tabLog", "☰", "Napló", `${all.length} fogás`, newLog ? `${newLog} új fogás` : "")}
         ${tile("records", "🏆", "Rekordok", best ? `${esc(best.species)} ${esc(numFmt(best.weight_kg))} kg` : "rangsorok")}
-        ${tile("tabTrips", "⚑", "Túrák", tripSub + (ti.suggest ? ` · ${ti.suggest} javaslat` : ""), ti.news ? `${ti.news} túrán újdonság` : "")}
+        ${tile("tabTrips", "⚑", "Túrák", tripSub + (ti.suggest ? ` · ${ti.suggest} javaslat` : ""), ti.news ? `${ti.news} túrán újdonság` : "",
+          ti.planned.length ? countdownHtml(ti.planned[0].start_at, "tile") : "")}
         ${tile("tabGallery", "▦", "Galéria", `${withPh} fotós fogás`, newGal ? `${newGal} új` : "")}
         ${tile("tabStats", "▤", "Összesítők", `idén ${thisYear} fogás`)}
         ${viewer ? "" : tile("tabFamily", "👪", "Családtagok", "meghívás nézőként")}
@@ -2345,7 +2374,7 @@
             <small>${p.approved ? "Jóváhagyva" : "Jóváhagyásra vár"} · regisztrált: ${esc(dtFmt(p.created_at))}</small>
           </div>
           ${p.id === state.uid ? "" : `<button type="button" class="btn small ${p.approved ? "danger" : "primary"}" data-member="${esc(p.id)}" data-ok="${p.approved ? "0" : "1"}">${p.approved ? "Letiltás" : "Jóváhagyás"}</button>`}
-        </div>`).join("") + (viewers.length && family ? `<h3 class="members-sub">Családtagok (nézők)</h3>${viewers.map((p) => family.viewerRowHtml(p)).join("")}` : "")
+        </div>`).join("") + (viewers.length && family ? `<h3 class="members-sub">Családtagok (nézők)</h3>${family.viewerListHtml("members", viewers, "Nincs aktív hozzáférésű néző.")}` : "")
         || `<p class="hint">Nincs tag.</p>`;
     } catch (e) {
       box.innerHTML = `<p class="msg err">${esc(errText(e))}</p>`;
@@ -2497,6 +2526,7 @@
       if (document.visibilityState === "visible" && state.uid) { syncOutbox(); refreshData(); }
     });
     setInterval(() => { if (state.outbox.length) syncOutbox(); }, 60000);
+    setInterval(tickCountdowns, 1000);
     // Karakterszámláló minden korlátos szövegmezőhöz (beszámoló, leírás, megjegyzés, memó)
     document.addEventListener("focusin", (e) => { if (isCounted(e.target)) updateCounter(e.target, true); });
     document.addEventListener("input", (e) => { if (isCounted(e.target)) updateCounter(e.target, true); });
