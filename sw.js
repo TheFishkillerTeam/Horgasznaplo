@@ -1,12 +1,13 @@
 // Horgásznapló – service worker: az app offline is elindul.
 // Új verzió feltöltésekor a CACHE_VERSION számát növeld meg!
-const CACHE_VERSION = "horgasznaplo-v19";
+const CACHE_VERSION = "horgasznaplo-v20";
 const APP_SHELL = [
   "./",
   "./index.html",
   "./style.css",
   "./app.js",
   "./news.js",
+  "./quotes.js",
   "./trips.js",
   "./records.js",
   "./family.js",

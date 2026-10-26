@@ -29,7 +29,7 @@ window.TFTTrips = function (A) {
 
   const RSVP = { yes: "Jön", maybe: "Talán", no: "Nem jön" };
   const isAdmin = () => !!(state.me && state.me.is_admin && state.me.role !== "viewer");
-  // Családtag (néző): mindent lát, de semmit nem módosíthat
+  // Nézelődő: mindent lát, de semmit nem módosíthat
   const W = () => !(state.me && state.me.role === "viewer");
   const canEditTrip = (t) => W() && t && (t.created_by === state.uid || isAdmin());
   const own = (row) => W() && row && (row.user_id === state.uid || isAdmin());

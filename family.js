@@ -1,7 +1,7 @@
 /* =====================================================================
-   Horgásznapló – Családtagok nézőként (6. verzió)
+   Horgásznapló – Nézelődők (6. verzió; elnevezés: 7.4)
    Meghívó QR-kóddal (15 perc) vagy linkkel e-mailben/üzenetben (48 óra),
-   egyszer használható. A néző mindent lát, de semmit nem módosíthat.
+   egyszer használható. A nézelődő mindent lát, de semmit nem módosíthat.
    Tag: 1 napos hozzáférést ad, a saját meghívottjának +1 napot adhat.
    Admin: tetszőleges időtartam vagy korlátlan, bárkinél módosíthat.
    Az app.js hívja meg: window.TFTFamily(api)
@@ -25,17 +25,18 @@ window.TFTFamily = function (A) {
   const isAdmin = () => !!(state.me && state.me.is_admin && state.me.role !== "viewer");
   const viewerValid = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
   const DUR = [
-    { m: 1440, label: "1 nap", txt: "1 napra" },
-    { m: 10080, label: "1 hét", txt: "1 hétre" },
-    { m: 43200, label: "1 hónap", txt: "1 hónapra" },
-    { m: null, label: "Korlátlan", txt: "korlátlan ideig" }
+    { m: 1440, label: "24 óra", txt: "24 óra", adj: "24 órás" },
+    { m: 10080, label: "1 hét", txt: "1 hét", adj: "1 hetes" },
+    { m: 43200, label: "1 hónap", txt: "1 hónap", adj: "1 hónapos" },
+    { m: null, label: "Korlátlan", txt: "korlátlan", adj: "korlátlan" }
   ];
-  const durText = (m) => (DUR.find((d) => d.m === m) || { txt: `${Math.round(m / 60)} órára` }).txt;
+  const durText = (m) => (DUR.find((d) => d.m === m) || { txt: `${Math.round(m / 60)} óra` }).txt;
+  const durAdj = (m) => (DUR.find((d) => d.m === m) || { adj: `${Math.round(m / 60)} órás` }).adj;
   const untilText = (p) => (!p.viewer_until ? "korlátlan" : dtFmt(p.viewer_until));
   const inviteUrl = (tok) => `${A.APP_URL}#meghivo-${tok}`;
 
   // ------------------------------------------------------------------
-  // Meghívó fogadása (a családtag telefonján)
+  // Meghívó fogadása (a nézelődő telefonján)
   // ------------------------------------------------------------------
   function readToken() {
     const m = location.hash.match(/^#meghivo-([0-9a-f]{32,64})$/i);
@@ -56,7 +57,7 @@ window.TFTFamily = function (A) {
       const { data } = await state.sb.from("profiles").select("*").eq("id", session.user.id).maybeSingle();
       if (data && data.role !== "viewer" && data.approved) {
         clearToken();
-        toast("Már tag vagy, neked nem kell meghívó. A meghívót a családtagodnak kell megnyitnia.", 6000);
+        toast("Már tag vagy, neked nem kell meghívó. A meghívót annak kell megnyitnia, akit nézelődőnek hívtál meg.", 6000);
         return false;
       }
       showRedeem(data);
@@ -110,7 +111,7 @@ window.TFTFamily = function (A) {
       if (error) throw error;
       clearToken();
       state.redeeming = false;
-      toast("Üdv a TFT Horgásznaplóban! Nézőként mindent megnézhetsz.", 5000);
+      toast("Üdv a TFT Horgásznaplóban! Nézelődőként mindent megnézhetsz.", 5000);
       await A.enterApp();
     } catch (e) {
       state.redeeming = false;
@@ -138,7 +139,7 @@ window.TFTFamily = function (A) {
   }
 
   // ------------------------------------------------------------------
-  // Meghívás (tagok) – Családtagok fül
+  // Meghívás (tagok) – Nézelődők fül
   // ------------------------------------------------------------------
   function stopQr() {
     clearInterval(F.timer); clearInterval(F.poll);
@@ -152,11 +153,11 @@ window.TFTFamily = function (A) {
     const adm = isAdmin();
     box.innerHTML = `
       <div class="card">
-        <h2>Családtag meghívása</h2>
-        <p class="hint">A családtag <b>nézőként</b> kap hozzáférést: mindent lát (fogások, fotók, túrák, rekordok), de nem rögzíthet, nem módosíthat és nem töröl semmit, értesítést sem kap.</p>
+        <h2>Nézelődő meghívása</h2>
+        <p class="hint">A <b>nézelődő</b> mindent lát (fogások, fotók, túrák, rekordok), de nem rögzíthet, nem módosíthat és nem töröl semmit, értesítést sem kap.</p>
         ${adm ? `<label class="field">Hozzáférés időtartama
           <select id="invDur">${DUR.map((d, i) => `<option value="${i}"${i === 0 ? " selected" : ""}>${d.label}</option>`).join("")}</select></label>`
-          : `<p class="hint">A hozzáférés <b>1 napra</b> szól. Utána egy nappal meghosszabbíthatod, az admin hosszabb időre is.</p>`}
+          : `<p class="hint">A hozzáférés <b>24 órás</b>. Utána egy nappal meghosszabbíthatod, az admin hosszabb időre is.</p>`}
         <div class="inv-btns">
           <button type="button" class="btn primary" data-inv="qr">📱 QR-kód megjelenítése</button>
           <button type="button" class="btn" data-inv="link">✉️ Meghívó e-mailben / üzenetben</button>
@@ -169,13 +170,13 @@ window.TFTFamily = function (A) {
         <div id="invList"><p class="hint">Betöltés…</p></div>
       </div>
       <div class="card">
-        <h3>${adm ? "Családtagok (nézők)" : "Meghívottaim"}</h3>
+        <h3>${adm ? "Nézelődők" : "Meghívottaim"}</h3>
         <div id="viewerList"><p class="hint">Betöltés…</p></div>
       </div>`;
     F.usedSeen = null;
     await loadViewers();
     await loadInvites();
-    // Amíg a Családtagok fül nyitva van, félpercenként frissül (beváltás visszajelzése)
+    // Amíg a Nézelődők fül nyitva van, félpercenként frissül (beváltás visszajelzése)
     clearInterval(F.listPoll);
     F.listPoll = setInterval(() => {
       if (!$("#invList") || $("#tabFamily").classList.contains("hidden")) { clearInterval(F.listPoll); F.listPoll = null; return; }
@@ -265,14 +266,14 @@ window.TFTFamily = function (A) {
       if (error) throw error;
       F.viewers = (data || []).filter((p) => isAdmin() || p.invited_by === state.uid)
         .sort((a, b) => (viewerValid(b) ? 1 : 0) - (viewerValid(a) ? 1 : 0) || String(b.invited_at || "").localeCompare(String(a.invited_at || "")));
-      box.innerHTML = F.viewers.length ? viewerListHtml("family", F.viewers, "Nincs aktív hozzáférésű néző.")
-        : `<p class="hint">${isAdmin() ? "Még nincs néző." : "Még nem hívtál meg senkit."}</p>`;
+      box.innerHTML = F.viewers.length ? viewerListHtml("family", F.viewers, "Nincs aktív hozzáférésű nézelődő.")
+        : `<p class="hint">${isAdmin() ? "Még nincs nézelődő." : "Még nem hívtál meg senkit."}</p>`;
     } catch (e) {
       box.innerHTML = `<p class="msg err">${esc(errText(e))}</p>`;
     }
   }
 
-  // Egy néző sora (a Családtagok fülön és az admin Tagok listájában is)
+  // Egy nézelődő sora (a Nézelődők fülön és az admin Tagok listájában is)
   function viewerRowHtml(p) {
     const ok = viewerValid(p);
     const mine = p.invited_by === state.uid;
@@ -282,7 +283,7 @@ window.TFTFamily = function (A) {
       ? [btn("day", "+1 nap"), btn("week", "+1 hét"), btn("month", "+1 hónap"), p.viewer_until || !ok ? btn("unlimited", "Korlátlan") : "", ok ? btn("revoke", "Visszavonás", "danger") : ""]
       : mine ? [btn("day", "+1 nap"), ok ? btn("revoke", "Visszavonás", "danger") : ""] : [];
     return `<div class="viewer-row${ok ? "" : " expired"}">
-      <div class="vr-main"><b>${esc(p.display_name || "Vendég")}</b> <span class="tag nezo">néző</span>
+      <div class="vr-main"><b>${esc(p.display_name || "Vendég")}</b> <span class="tag nezo">nézelődő</span>
         <small>${ok ? `Aktív · ${p.viewer_until ? "lejár: " + esc(untilText(p)) : "korlátlan"}` : `Lejárt${p.viewer_until ? " · " + esc(untilText(p)) : ""}`}
           ${p.invited_by ? ` · meghívta: ${esc(A.nameOf(p.invited_by))}` : ""}${p.invited_at ? `, ${esc(dtFmt(p.invited_at))}` : ""}</small></div>
       ${acts.filter(Boolean).length ? `<div class="vr-acts">${acts.join("")}</div>` : ""}
@@ -331,7 +332,7 @@ window.TFTFamily = function (A) {
     } catch (e) { img = `<p class="msg err">A QR-kód nem készült el: ${esc(errText(e))}</p>`; }
     panel.innerHTML = `<div class="qr-box">
         ${img}
-        <p class="qr-title">Olvastasd be a családtag telefonjának kamerájával</p>
+        <p class="qr-title">Olvastasd be a nézelődő telefonjának kamerájával</p>
         <p class="hint">Hozzáférés: ${esc(durText(inv.access_minutes))} · egyszer használható · érvényes még <b id="qrLeft">15:00</b></p>
         <p class="msg" id="qrStatus" role="status"></p>
         <div class="row-btns"><button type="button" class="btn small" data-inv="qr">Új kód</button><button type="button" class="btn small" data-inv="close">Bezárás</button></div>
@@ -352,11 +353,11 @@ window.TFTFamily = function (A) {
       const { data } = await state.sb.from("invites").select("*").eq("token", inv.token).maybeSingle();
       if (data && data.used_at) {
         stopQr();
-        let who = "A családtag";
+        let who = "A nézelődő";
         const { data: p } = await state.sb.from("profiles").select("*").eq("id", data.used_by).maybeSingle();
         if (p && p.display_name) who = p.display_name;
         $("#qrStatus").className = "msg ok";
-        $("#qrStatus").textContent = `✓ ${who} belépett nézőként.`;
+        $("#qrStatus").textContent = `✓ ${who} belépett nézelődőként.`;
         const im = document.querySelector(".qr-img"); if (im) im.classList.add("used");
         await loadViewers();
         if (F.usedSeen) F.usedSeen.add(inv.token);   // itt már jeleztük, a lista ne jelezze újra
@@ -374,7 +375,8 @@ window.TFTFamily = function (A) {
     const club = (A.CFG.CLUB_NAME || "TFT");
     const subject = `Meghívó – ${club} Horgásznapló`;
     const valid = existing ? `${dtFmt(inv.expires_at)}-ig érvényes` : "48 óráig érvényes";
-    const text = `Szia! ${me} meghívott a ${club} Horgásznaplójába nézőként (${durText(inv.access_minutes)}). Itt láthatod a fogásainkat, fotóinkat és túráinkat.\n\nA meghívó ${valid} és egyszer használható – nyisd meg ezt a linket a telefonodon:\n${url}`;
+    const short = ((club.match(/\(([^)]+)\)/) || [])[1]) || club;
+    const text = `Szia! ${me} ${durAdj(inv.access_minutes)} hozzáférést biztosított neked a ${short} Horgásznaplóhoz nézelődőként. Itt láthatod a fogásainkat, fotóinkat és túráinkat.\n\nA meghívó ${valid} és egyszer használható – nyisd meg ezt a linket a telefonodon:\n${url}`;
     $("#invPanel").innerHTML = `<div class="link-box">
         <p class="hint">Meghívó link (${esc(valid)}, egyszer használható):</p>
         <input class="link-in" readonly value="${esc(url)}" aria-label="Meghívó link">
