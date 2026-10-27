@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "7.4";
+  const APP_VERSION = "7.5";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -137,12 +137,20 @@
   }
 
   let toastTimer;
-  function toast(msg, ms = 3000) {
+  // A fontos üzenet (pl. egyéni rekord) a kiírás idejéig nem írható felül; a többi utána jelenik meg
+  let toastHold = 0, toastQueue = [];
+  function toast(msg, ms = 3000, important = false) {
+    if (!important && Date.now() < toastHold) { toastQueue.push([msg, ms]); return; }
     const t = $("#toast");
     t.textContent = msg;
     t.classList.remove("hidden");
     clearTimeout(toastTimer);
-    toastTimer = setTimeout(() => t.classList.add("hidden"), ms);
+    if (important) toastHold = Date.now() + ms;
+    toastTimer = setTimeout(() => {
+      t.classList.add("hidden");
+      const next = toastQueue.shift();
+      if (next) { toastQueue = []; toast(next[0], next[1]); }
+    }, ms);
   }
 
   function errText(e) {
@@ -220,6 +228,8 @@
   let family = null;    // Nézelődők (family.js)
   let news = null;      // Újdonságok jelölése (news.js)
   let quotes = null;    // Napi idézet (quotes.js)
+  let tally = null;     // Tabella (tally.js)
+  let admin = null;     // Karbantartás: mentés, tárhely (admin.js)
   // Nézelődő: mindent lát, de semmit nem módosíthat
   const isViewer = () => !!(state.me && state.me.role === "viewer");
   const viewerOk = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
@@ -231,7 +241,7 @@
     $$(".view").forEach((v) => v.classList.toggle("hidden", v.id !== viewId));
     const main = viewId === "viewMain";
     $("#btnHome").classList.toggle("hidden", !main || state.tab === "tabHome");
-    $("#btnMenu").classList.toggle("hidden", !(main || viewId === "viewMembers" || viewId === "viewQuotes" || viewId === "viewPending"));
+    $("#btnMenu").classList.toggle("hidden", !(main || viewId === "viewMembers" || viewId === "viewQuotes" || viewId === "viewAdmin" || viewId === "viewPending"));
     $("#menuPanel").classList.add("hidden");
   }
 
@@ -295,8 +305,10 @@
     bindUi();
     if (typeof window.TFTNews === "function") news = window.TFTNews({ state, idb });
     if (typeof window.TFTQuotes === "function") quotes = window.TFTQuotes({ state, $, esc, toast, errText, idb, tzParts, show, renderHome: () => renderHome() });
+    if (typeof window.TFTTally === "function") tally = window.TFTTally({ esc, numFmt, nameOf });
+    if (typeof window.TFTAdmin === "function") admin = window.TFTAdmin({ state, $, esc, toast, errText, idb, tzParts, dtFmt, show, APP_VERSION, renderHome: () => renderHome() });
     if (typeof window.TFTTrips === "function") {
-      trips = window.TFTTrips({ news,
+      trips = window.TFTTrips({ news, tally,
         state, $, esc, numFmt, dtFmt, tzParts, toast, errText, idb, uuid, TZ, CFG, APP_URL,
         nameOf, anglerOf, everyEntry, cardHtml, loadThumbs, photoCount, catchPhotoPaths, captionOf,
         signedUrlsFor, openViewer, prepareImage, uploadPhoto, extOf, openMap, windDir, callFn, showTab, startCatchForTrip, coverPath, exifDate, placeLabel, countdownHtml
@@ -389,6 +401,7 @@
     if (trips) await trips.loadCache();
     if (news) await news.loadCache();
     if (quotes) await quotes.loadCache();
+    if (admin) await admin.loadCache();
   }
 
   let entering = null;
@@ -426,6 +439,7 @@
     $("#menuUser").textContent = `${state.me.display_name || ""}${isViewer() ? " (nézelődő)" : state.me.is_admin ? " (admin)" : ""}`;
     $("#menuMembers").classList.toggle("hidden", !state.me.is_admin || isViewer());
     $("#menuQuotes").classList.toggle("hidden", !state.me.is_admin || isViewer());
+    $("#menuAdmin").classList.toggle("hidden", !state.me.is_admin || isViewer());
     show("viewMain");
     resetForm();
     fillDatalists();
@@ -448,6 +462,7 @@
     }
     if (news) await news.load();
     if (quotes) await quotes.loadDaily();
+    if (admin) await admin.fetchUsage();
     try {
       const pr = await state.sb.from("profiles").select("id, display_name, approved");
       if (pr.error) throw pr.error;
@@ -607,6 +622,7 @@
     state.uid = null; state.me = null;
     if (news) news.reset();
     if (quotes) quotes.reset();
+    if (admin) admin.reset();
     show("viewAuth");
   }
 
@@ -1045,6 +1061,7 @@
       if (!guest) { msg.className = "msg err"; msg.textContent = "Válaszd ki, melyik vendég fogta a halat."; return; }
     }
     const backToTrip = ctx ? ctx.tripId : null;
+    const pbMsg = pbMessage(Object.assign({ guest_name: guest, user_id: state.uid }, r.data));
     const item = Object.assign({
       guest_name: guest,
       trip_link: ctx ? ctx.tripId : null,
@@ -1062,7 +1079,7 @@
       state.outbox.push(item);
       updateNet();
       fillDatalists();
-      toast(navigator.onLine ? "Mentve, feltöltés folyamatban…" : "Mentve a telefonra. A kapcsolat helyreállása után feltöltődik.");
+      toast((pbMsg ? pbMsg + "\n" : "") + (navigator.onLine ? "Mentve, feltöltés folyamatban…" : "Mentve a telefonra. A kapcsolat helyreállása után feltöltődik."), pbMsg ? 6000 : 3000, !!pbMsg);
       resetForm();
       syncOutbox();
       if (backToTrip && trips) { showTab("tabTrips"); trips.open(backToTrip, "catches"); }
@@ -1186,6 +1203,7 @@
       ${viewer ? `<div class="card viewer-note">👀 <b>Nézelődőként</b> látod a naplót: mindent megnézhetsz, de nem módosíthatsz.
           <small>Hozzáférés: ${state.me.viewer_until ? "lejár " + esc(dtFmt(state.me.viewer_until)) + "-kor" : "korlátlan"}</small></div>`
         : `<button type="button" class="home-new" data-go="tabNew"><span aria-hidden="true">＋</span> Új fogás rögzítése</button>`}
+      ${admin ? admin.homeHtml() : ""}
       ${mine ? `<button type="button" class="card home-alert" data-home-sync>⟳ ${mine} fogás feltöltésre vár – koppints a küldéshez</button>` : ""}
       <div class="home-grid">
         ${tile("tabLog", "☰", "Napló", `${all.length} fogás`, newLog ? `${newLog} új fogás` : "")}
@@ -1824,6 +1842,7 @@
     const tags = [
       opts && opts.isNew ? `<span class="new-chip">ÚJ</span>` : "",
       c._pending ? `<span class="tag pending">Feltöltésre vár</span>` : "",
+      isPB(c) ? `<span class="tag pb" title="A horgász eddigi legnagyobb hala ebből a fajból">🏅 Egyéni csúcs</span>` : "",
       c.released ? `<span class="tag">Visszaengedve</span>` : "",
       c.updated_at ? `<span class="tag" title="${esc(dtFmt(c.updated_at))}">Módosítva</span>` : "",
       c.guest_name ? `<span class="tag guest">Vendég – versenyen kívül</span>` : ""
@@ -1866,6 +1885,35 @@
   }
 
   // Egy fogás tömör sora (névnap itt nincs, csak a lenyíló részletekben)
+  // ------------------------------------------------------------------
+  // Egyéni csúcs (7.5): horgászonként és halfajonként a legnagyobb (tagoknál)
+  // ------------------------------------------------------------------
+  const spKey = (sp) => String(sp || "").trim().toLowerCase();
+  let pbMemo = { src: null, n: -1, set: new Set() };
+  function pbSet() {
+    const all = everyEntry();
+    if (pbMemo.src === state.catches && pbMemo.n === all.length) return pbMemo.set;
+    const best = new Map();
+    all.forEach((c) => {
+      if (c.guest_name || c.weight_kg == null) return;
+      const k = c.user_id + "|" + spKey(c.species), b = best.get(k), w = Number(c.weight_kg);
+      if (!b || w > Number(b.weight_kg) || (w === Number(b.weight_kg) && c.caught_at < b.caught_at)) best.set(k, c);
+    });
+    pbMemo = { src: state.catches, n: all.length, set: new Set(Array.from(best.values()).map((c) => c.client_id)) };
+    return pbMemo.set;
+  }
+  const isPB = (c) => !c.guest_name && pbSet().has(c.client_id);
+  // Mentés előtt: új egyéni rekord vagy az első ilyen hal?
+  function pbMessage(item) {
+    if (item.guest_name || !item.species) return null;
+    const mine = everyEntry().filter((c) => !c.guest_name && c.user_id === item.user_id && spKey(c.species) === spKey(item.species));
+    if (!mine.length) return `🎉 Az első fogásod ebből a halfajból: ${item.species}!`;
+    if (item.weight_kg == null) return null;
+    const prev = mine.filter((c) => c.weight_kg != null).reduce((m, c) => Math.max(m, Number(c.weight_kg)), -1);
+    if (prev >= 0 && Number(item.weight_kg) > prev) return `🏅 Új egyéni rekord! ${item.species}: ${numFmt(item.weight_kg)} kg (eddig: ${numFmt(prev)} kg)`;
+    return null;
+  }
+
   // Új fogás a naplóban: más rögzítette a napló utolsó megnyitása óta
   const isNewLog = (c, live) => !!(news && !c._pending && news.isNew(c.created_at, "log", c.user_id, live));
 
@@ -1880,7 +1928,7 @@
             ${nPh > 1 ? `<span class="crow-count">${nPh}</span>` : ""}
           </span>
           <span class="crow-main">
-            <span class="crow-species">${isNewLog(c) ? `<span class="new-chip">ÚJ</span>` : ""}${esc(c.species)}${c.released ? ` <span class="crow-tag">vissza</span>` : ""}${c._pending ? ` <span class="crow-tag pending">vár</span>` : ""}</span>
+            <span class="crow-species">${isNewLog(c) ? `<span class="new-chip">ÚJ</span>` : ""}${esc(c.species)}${isPB(c) ? ` <span title="Egyéni csúcs">🏅</span>` : ""}${c.released ? ` <span class="crow-tag">vissza</span>` : ""}${c._pending ? ` <span class="crow-tag pending">vár</span>` : ""}</span>
             <span class="crow-sub">${esc(anglerOf(c))} · ${esc(c.water)}</span>
           </span>
           <span class="crow-right">
@@ -2295,12 +2343,71 @@
   // ------------------------------------------------------------------
   // Összesítők
   // ------------------------------------------------------------------
+  // ------------------------------------------------------------------
+  // Évértékelő (7.5): az év számai egy oldalon
+  // ------------------------------------------------------------------
+  const HU_MONTH = ["január", "február", "március", "április", "május", "június", "július", "augusztus", "szeptember", "október", "november", "december"];
+  function yearReviewHtml(list, y) {
+    if (!list.length) return `<div class="card empty">Nincs adat.</div>`;
+    const wt = (c) => (c.weight_kg == null ? null : Number(c.weight_kg));
+    const kgs = (arr) => arr.reduce((s, c) => s + (wt(c) || 0), 0);
+    const by = (keyFn) => { const m = new Map(); list.forEach((c) => { const k = keyFn(c); if (k == null) return; if (!m.has(k)) m.set(k, []); m.get(k).push(c); }); return m; };
+    const top = (m, score) => Array.from(m.entries()).sort((a, b) => score(b[1]) - score(a[1]));
+    const medal = (i) => ["🥇", "🥈", "🥉"][i] || `${i + 1}.`;
+    const kgTxt = (v) => `${numFmt(Math.round(v * 10) / 10)} kg`;
+    const users = by((c) => c.user_id), species = by((c) => c.species), waters = by((c) => c.water);
+    const withW = list.filter((c) => wt(c) != null);
+    const biggestAll = withW.slice().sort((a, b) => wt(b) - wt(a))[0];
+    const byCount = top(users, (a) => a.length).slice(0, 3);
+    const byKg = top(users, kgs).filter(([, a]) => kgs(a) > 0).slice(0, 3);
+    const spBest = top(species, (a) => a.length).map(([sp, arr]) => [sp, arr.filter((c) => wt(c) != null).sort((a, b) => wt(b) - wt(a))[0], arr.length]);
+    const bestOf = (m, label) => { const t = top(m, (a) => a.length)[0]; return t ? { key: label(t[0]), n: t[1].length } : null; };
+    const month = bestOf(by((c) => Number(tzParts(new Date(c.caught_at)).m) - 1), (k) => HU_MONTH[k]);
+    const hourPart = (c) => { const h = Number(tzParts(new Date(c.caught_at)).h); return h >= 4 && h < 7 ? "hajnal" : h < 12 && h >= 7 ? "délelőtt" : h >= 12 && h < 17 ? "délután" : h >= 17 && h < 21 ? "este" : "éjszaka"; };
+    const part = bestOf(by(hourPart), (k) => k);
+    const moon = bestOf(by((c) => moonInfo(new Date(c.caught_at)).idx), (k) => MOON_NAMES[k].toLowerCase());
+    const water = bestOf(waters, (k) => k);
+    // Legjobb túra: a tagok fogásainak száma szerint
+    let bestTrip = null;
+    if (trips) {
+      const tm = new Map();
+      list.forEach((c) => trips.tripsOfCatch(c).forEach((t) => { if (!tm.has(t.id)) tm.set(t.id, { t, arr: [] }); tm.get(t.id).arr.push(c); }));
+      bestTrip = Array.from(tm.values()).sort((a, b) => b.arr.length - a.arr.length || kgs(b.arr) - kgs(a.arr))[0] || null;
+    }
+    const row = (l, v) => `<div class="yr-row"><span>${l}</span><b>${v}</b></div>`;
+    return `
+      <div class="card yr-head"><div class="yr-title">🏆 Évértékelő ${y ? esc(y) : "– minden év"}</div>
+        <div class="yr-big">${list.length} fogás · ${esc(kgTxt(kgs(list)))}</div>
+        <div class="hint">${species.size} halfaj · ${users.size} horgász · ${waters.size} vízterület${bestTrip ? "" : ""}</div></div>
+      ${biggestAll ? `<div class="card"><h3>🐟 Az év hala</h3>
+        <div class="yr-fish">${esc(biggestAll.species)} – ${esc(kgTxt(wt(biggestAll)))}</div>
+        <div class="hint">${esc(nameOf(biggestAll.user_id))} · ${esc(biggestAll.water)} · ${esc(dtFmt(biggestAll.caught_at))}</div></div>` : ""}
+      <div class="card"><h3>🎣 Az év horgásza</h3>
+        <div class="yr-sub">Legtöbb fogás</div>${byCount.map(([u, a], i) => row(`${medal(i)} ${esc(nameOf(u))}`, `${a.length} db`)).join("")}
+        ${byKg.length ? `<div class="yr-sub">Legnagyobb össztömeg</div>${byKg.map(([u, a], i) => row(`${medal(i)} ${esc(nameOf(u))}`, esc(kgTxt(kgs(a))))).join("")}` : ""}</div>
+      <div class="card"><h3>📏 Fajonként a legnagyobb</h3>
+        ${spBest.map(([sp, c, n]) => row(`${esc(sp)} <small class="hint">(${n} db)</small>`, c ? `${esc(kgTxt(wt(c)))} <small class="hint">${esc(nameOf(c.user_id))}</small>` : "–")).join("")}</div>
+      <div class="card"><h3>📅 Mikor és hol fogott a legjobban?</h3>
+        ${month ? row("Legjobb hónap", `${esc(month.key)} <small class="hint">(${month.n} db)</small>`) : ""}
+        ${part ? row("Legjobb napszak", `${esc(part.key)} <small class="hint">(${part.n} db)</small>`) : ""}
+        ${moon ? row("Legjobb holdfázis", `${esc(moon.key)} <small class="hint">(${moon.n} db)</small>`) : ""}
+        ${water ? row("Kedvenc vízterület", `${esc(water.key)} <small class="hint">(${water.n} db)</small>`) : ""}
+        ${bestTrip ? row("Legjobb túra", `${esc(bestTrip.t.title)} <small class="hint">(${bestTrip.arr.length} db, ${esc(kgTxt(kgs(bestTrip.arr)))})</small>`) : ""}</div>
+      <p class="hint stats-note">A vendégfogások nem számítanak bele. A „legjobb” a fogások száma szerint értendő.</p>`;
+  }
+
   function renderStats() {
     const entries = allEntries();
     fillSelect($("#sYear"), yearOptions(entries), "Minden év");
     const y = $("#sYear").value;
     const mode = $("#sMode").value;
     const list = entries.filter((c) => !y || yearOf(c.caught_at) === y);
+    // Holdfázis: halfaj szerint is szűrhető (7.5)
+    const spSel = $("#sSpecies");
+    const spMode = ["moon", "pressure", "daypart", "temp", "wind"].includes(mode);
+    spSel.classList.toggle("hidden", !spMode);
+    if (spMode) fillSelect(spSel, Array.from(new Set(list.map((c) => c.species).filter(Boolean))).sort((a, b) => a.localeCompare(b, "hu")).map((v) => ({ value: v, label: v })), "Minden halfaj");
+    const sp = spMode ? spSel.value : "";
     const out = $("#statsOut");
     if (!list.length) { out.innerHTML = `<div class="card empty">Nincs adat.</div>`; return; }
 
@@ -2321,6 +2428,59 @@
         <tbody>${rows.map((r) => `<tr>${r.map((v, i) => `<td class="${heads[i].num ? "num" : ""}">${v}</td>`).join("")}</tr>`).join("")}</tbody>
       </table></div>`;
 
+    // Sávos táblázat (holdfázis mintájára): db, össztömeg, legnagyobb hal
+    const sel = list.filter((c) => !sp || c.species === sp);
+    const spNote = sp ? `<p class="hint stats-note">Csak: <b>${esc(sp)}</b></p>` : "";
+    const bucketTable = (title, buckets, valOf) => {
+      const rows = buckets.map((bk) => {
+        const arr = sel.filter((c) => { const v = valOf(c); return v != null && !Number.isNaN(v) && bk.test(v); });
+        const b = biggest(arr);
+        return [`${esc(bk.label)}${bk.sub ? `<br><small class="hint">${esc(bk.sub)}</small>` : ""}`, arr.length, numFmt(arr.reduce((s2, c) => s2 + w(c), 0)),
+          b ? `${numFmt(b.weight_kg)} kg<br><small>${esc(b.species)}</small>` : "–"];
+      });
+      return table([{ t: title }, { t: "Db", num: true }, { t: "Össz. kg", num: true }, { t: "Legnagyobb", num: true }], rows);
+    };
+    const wx = (c, k) => (c.weather && c.weather[k] != null ? Number(c.weather[k]) : null);
+    const missing = (k, what) => { const n = sel.filter((c) => wx(c, k) == null).length; return n ? ` ${n} fogásnál nincs ${what}.` : ""; };
+
+    if (mode === "daypart") {
+      const hour = (c) => Number(tzParts(new Date(c.caught_at)).h);
+      out.innerHTML = spNote + bucketTable("Napszak", [
+        { label: "🌅 Hajnal", sub: "4:00–6:59", test: (h) => h >= 4 && h < 7 },
+        { label: "☀️ Délelőtt", sub: "7:00–11:59", test: (h) => h >= 7 && h < 12 },
+        { label: "🌤 Délután", sub: "12:00–16:59", test: (h) => h >= 12 && h < 17 },
+        { label: "🌇 Este", sub: "17:00–20:59", test: (h) => h >= 17 && h < 21 },
+        { label: "🌙 Éjszaka", sub: "21:00–3:59", test: (h) => h >= 21 || h < 4 }
+      ], hour) + `<p class="hint stats-note">A fogás időpontja szerint (budapesti idő).</p>`;
+      return;
+    }
+    if (mode === "temp") {
+      out.innerHTML = spNote + bucketTable("Léghőmérséklet", [
+        { label: "Fagyos, hideg", sub: "5 °C alatt", test: (v) => v < 5 },
+        { label: "Hűvös", sub: "5–9,9 °C", test: (v) => v >= 5 && v < 10 },
+        { label: "Enyhe", sub: "10–14,9 °C", test: (v) => v >= 10 && v < 15 },
+        { label: "Kellemes", sub: "15–19,9 °C", test: (v) => v >= 15 && v < 20 },
+        { label: "Meleg", sub: "20–24,9 °C", test: (v) => v >= 20 && v < 25 },
+        { label: "Forró", sub: "25 °C és felette", test: (v) => v >= 25 }
+      ], (c) => wx(c, "temp_c")) + `<p class="hint stats-note">A fogás időpontjában, 2 m magasan mért léghőmérséklet (Open-Meteo), nem a víz hőmérséklete.${missing("temp_c", "hőmérsékletadat")}</p>`;
+      return;
+    }
+    if (mode === "wind") {
+      out.innerHTML = spNote + bucketTable("Szélerősség", [
+        { label: "Szélcsend", sub: "5 km/h alatt", test: (v) => v < 5 },
+        { label: "Gyenge szél", sub: "5–11,9 km/h", test: (v) => v >= 5 && v < 12 },
+        { label: "Mérsékelt szél", sub: "12–19,9 km/h", test: (v) => v >= 12 && v < 20 },
+        { label: "Élénk szél", sub: "20–29,9 km/h", test: (v) => v >= 20 && v < 30 },
+        { label: "Erős szél", sub: "30 km/h és felette", test: (v) => v >= 30 }
+      ], (c) => wx(c, "wind_kmh")) + `<p class="hint stats-note">A fogás időpontjában, 10 m magasan mért átlagos szélsebesség (Open-Meteo).${missing("wind_kmh", "széladat")}</p>`;
+      return;
+    }
+    if (mode === "year") { out.innerHTML = yearReviewHtml(list, y); return; }
+
+    if (mode === "cross") {
+      out.innerHTML = tally ? `<div class="card"><p class="hint">Horgászonként és halfajonként: darab / össztömeg${y ? ` (${esc(y)})` : ""}. A vendégfogás itt nem számít.</p>${tally.summaryHtml(list)}</div>` : "";
+      return;
+    }
     if (mode === "user" || mode === "water" || mode === "species") {
       const keyFn = mode === "user" ? (c) => c.user_id : mode === "water" ? (c) => c.water : (c) => c.species;
       const label = mode === "user" ? nameOf : (k) => k;
@@ -2346,14 +2506,39 @@
           esc(nameOf(r.b.user_id)), `${esc(r.b.water)}<br><small>${esc(dtFmt(r.b.caught_at))}</small>`])
       ) : `<div class="card empty">Nincs súllyal rögzített fogás.</div>`;
     } else if (mode === "moon") {
-      const g = group((c) => moonInfo(new Date(c.caught_at)).idx);
+      const g = new Map();
+      sel.forEach((c) => {
+        const k = moonInfo(new Date(c.caught_at)).idx;
+        if (!g.has(k)) g.set(k, []);
+        g.get(k).push(c);
+      });
       const rows = MOON_NAMES.map((nm, i) => {
         const arr = g.get(i) || [];
         const b = biggest(arr);
         return [esc(["🌑","🌒","🌓","🌔","🌕","🌖","🌗","🌘"][i] + " " + nm), arr.length, numFmt(arr.reduce((s, c) => s + w(c), 0)),
           b ? `${numFmt(b.weight_kg)} kg<br><small>${esc(b.species)}</small>` : "–"];
       });
-      out.innerHTML = table([{ t: "Holdfázis" }, { t: "Db", num: true }, { t: "Össz. kg", num: true }, { t: "Legnagyobb", num: true }], rows);
+      out.innerHTML = spNote +
+        table([{ t: "Holdfázis" }, { t: "Db", num: true }, { t: "Össz. kg", num: true }, { t: "Legnagyobb", num: true }], rows);
+    } else if (mode === "pressure") {
+      // Légnyomás (7.5): tartomány és 3 órás változás szerint, a holdfázis mintájára
+      const LEVEL = [
+        { label: "Alacsony", sub: "< 1005 hPa", test: (v) => v < 1005 },
+        { label: "Mérsékelten alacsony", sub: "1005–1012 hPa", test: (v) => v >= 1005 && v < 1013 },
+        { label: "Átlagos", sub: "1013–1019 hPa", test: (v) => v >= 1013 && v < 1020 },
+        { label: "Mérsékelten magas", sub: "1020–1026 hPa", test: (v) => v >= 1020 && v < 1027 },
+        { label: "Magas", sub: "≥ 1027 hPa", test: (v) => v >= 1027 }
+      ];
+      const TREND = [
+        { label: "↓↓ Gyorsan csökkenő", sub: "több mint 1,5 hPa-t esett", test: (v) => v < -1.5 },
+        { label: "↓ Csökkenő", sub: "0,5–1,5 hPa-t esett", test: (v) => v >= -1.5 && v < -0.5 },
+        { label: "→ Stagnáló", sub: "±0,5 hPa-n belül", test: (v) => v >= -0.5 && v <= 0.5 },
+        { label: "↑ Emelkedő", sub: "0,5–1,5 hPa-t nőtt", test: (v) => v > 0.5 && v <= 1.5 },
+        { label: "↑↑ Gyorsan emelkedő", sub: "több mint 1,5 hPa-t nőtt", test: (v) => v > 1.5 }
+      ];
+      out.innerHTML = spNote + bucketTable("Légnyomás", LEVEL, (c) => wx(c, "pressure_hpa")) +
+        bucketTable("Változás (3 óra)", TREND, (c) => wx(c, "pressure_trend_3h")) +
+        `<p class="hint stats-note">A fogás időpontjában, tengerszintre átszámított légnyomás és az azt megelőző 3 óra változása (Open-Meteo).${missing("pressure_hpa", "légnyomásadat")}</p>`;
     } else if (mode === "month") {
       const rows = Array.from(group((c) => monthOf(c.caught_at)).entries())
         .sort((a, b) => (a[0] < b[0] ? 1 : -1))
@@ -2481,7 +2666,7 @@
     try { const so = localStorage.getItem("logSort"); if (so && $(`#fSort option[value="${so}"]`)) $("#fSort").value = so; } catch (_) { /* nincs tároló */ }
     $("#fSort").addEventListener("change", () => { try { localStorage.setItem("logSort", $("#fSort").value); } catch (_) { /* nincs tároló */ } renderLog(); });
     $("#fDateChips").addEventListener("click", (e) => { const b = e.target.closest("[data-dr]"); if (b) setLogDate(quickRange(b.dataset.dr)); });
-    ["#sYear", "#sMode"].forEach((s) => $(s).addEventListener("change", renderStats));
+    ["#sYear", "#sMode", "#sSpecies"].forEach((s) => $(s).addEventListener("change", renderStats));
     $("#btnExport").addEventListener("click", exportCsv);
     $("#btnSync").addEventListener("click", () => syncOutbox());
     $("#btnRecheck").addEventListener("click", () => enterApp());
@@ -2496,6 +2681,7 @@
         if (a === "rename") rename();
         if (a === "members") showMembers();
         if (a === "quotes" && quotes) quotes.open();
+        if (a === "admin" && admin) admin.open();
         if (a === "push") { $("#menuPanel").classList.add("hidden"); currentPushSub().then((s) => (s ? disablePush() : enablePush())); }
         if (a === "pushtest") { $("#menuPanel").classList.add("hidden"); testPush(); }
       }

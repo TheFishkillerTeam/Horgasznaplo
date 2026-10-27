@@ -582,3 +582,60 @@ h3 { margin: 0 0 8px; font-size: 16px; }
 .quote-row.today .quote-text { font-weight: 600; }
 .quote-text { font-size: 15px; }
 .quote-edit { width: 100%; font: inherit; }
+
+/* 7.5: Tabella (túra Fogások fül, Összesítők „Horgász × halfaj”) */
+.tally .tally-days { margin: 8px 0 4px; }
+.chip.active { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+.seg3 { display: flex; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 10px 0 6px; }
+.seg3 button { flex: 1; font: inherit; font-size: 13px; padding: 7px 6px; border: 0; background: var(--surface); color: var(--muted); cursor: pointer; min-height: 36px; }
+.seg3 button.active { background: var(--accent); color: var(--accent-ink); font-weight: 600; }
+.tl-wrap { margin: 0 -4px; }
+.tl-table { font-size: 14px; }
+.tl-table th, .tl-table td { padding: 8px 6px; }
+.tl-table td.num b { display: block; font-weight: 700; }
+.tl-table td.num small { display: block; font-size: 11.5px; color: var(--muted); }
+.tl-table .tl-name { position: sticky; left: 0; background: var(--surface); z-index: 1; min-width: 84px; }
+.tl-table .tl-total { background: var(--bg); }
+.tl-table tfoot td { border-top: 2px solid var(--line); border-bottom: 0; font-weight: 600; }
+.tl-zero { color: var(--muted); }
+.tl-guest { color: var(--muted); }
+.tl-guest .tag.guest, .tl-angler .tag.guest, .tl-rank .tag.guest { margin-left: 6px; font-size: 10.5px; }
+.tl-angler, .tl-rank { padding: 8px 0; border-bottom: 1px solid var(--line); }
+.tl-angler:last-child, .tl-rank:last-child { border-bottom: 0; }
+.tl-aname { font-weight: 700; margin-bottom: 4px; }
+.tl-lines { list-style: none; margin: 0; padding: 0; font-size: 14px; }
+.tl-lines li { padding: 2px 0; }
+.tl-sp { display: inline-block; min-width: 70px; color: var(--muted); }
+.tl-ws { font-variant-numeric: tabular-nums; }
+.tl-rlist { list-style: none; margin: 0; padding: 0; font-size: 14px; font-variant-numeric: tabular-nums; }
+.tl-rlist li { padding: 3px 0; }
+.tl-place { display: inline-block; min-width: 30px; }
+/* Tabella: keskeny kijelzőn is kiférjen 4–5 halfaj */
+.tl-table { font-size: 13px; table-layout: auto; }
+.tl-table th, .tl-table td { padding: 7px 4px; }
+.tl-table th { font-size: 11.5px; }
+.tl-table .tl-name { min-width: 0; max-width: 84px; word-break: break-word; padding-left: 2px; }
+.tl-table td.num small { font-size: 10.5px; }
+.tl-out { display: block; font-size: 10px; color: var(--warn); line-height: 1.2; }
+.stats-species { width: 100%; margin-top: 8px; }
+.stats-note { margin: 0 4px 6px; }
+
+/* 7.5: Évértékelő, karbantartás, egyéni csúcs */
+.yr-head { text-align: center; }
+.yr-title { font-size: 20px; font-weight: 800; }
+.yr-big { font-size: 26px; font-weight: 800; color: var(--accent); margin: 6px 0 2px; font-variant-numeric: tabular-nums; }
+.yr-fish { font-size: 19px; font-weight: 700; }
+.yr-sub { font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin: 10px 0 2px; }
+.yr-row { display: flex; justify-content: space-between; gap: 10px; padding: 6px 0; border-bottom: 1px solid var(--line); font-size: 14.5px; }
+.yr-row:last-child { border-bottom: 0; }
+.yr-row b { text-align: right; font-variant-numeric: tabular-nums; }
+.use-row { margin: 10px 0 14px; }
+.use-head { display: flex; justify-content: space-between; gap: 8px; font-size: 14px; margin-bottom: 6px; flex-wrap: wrap; }
+.use-bar { height: 10px; border-radius: 6px; background: var(--bg); overflow: hidden; border: 1px solid var(--line); }
+.use-bar span { display: block; height: 100%; background: var(--accent); }
+.use-bar span.warn { background: #f59f00; }
+.use-bar span.bad { background: var(--bad); }
+.home-alert.warn { border-left: 4px solid #f59f00; text-align: left; }
+.tag.pb { color: #8a5a00; border-color: #f59f00; background: #fff4d6; font-weight: 600; }
+@media (prefers-color-scheme: dark) { .tag.pb { color: #ffd27a; background: transparent; } }
+.toast { white-space: pre-line; }

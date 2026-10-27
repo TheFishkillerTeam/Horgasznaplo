@@ -19,7 +19,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="32" height="32">
-      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v7.4</small></span>
+      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v7.5</small></span>
     </div>
     <div class="topbar-right">
       <span id="netBadge" class="badge" title="Kapcsolat állapota">—</span>
@@ -36,6 +36,7 @@
     <button type="button" data-action="rename">Megjelenített név módosítása</button>
     <button type="button" data-action="members" id="menuMembers" class="hidden">Tagok jóváhagyása</button>
     <button type="button" data-action="quotes" id="menuQuotes" class="hidden">💬 Idézetek</button>
+    <button type="button" data-action="admin" id="menuAdmin" class="hidden">🛠 Karbantartás (mentés, tárhely)</button>
     <button type="button" data-action="logout">Kijelentkezés</button>
   </div>
 
@@ -360,11 +361,18 @@
               <option value="user">Horgászonként</option>
               <option value="water">Vízterületenként</option>
               <option value="species">Halfajonként</option>
+              <option value="cross">Horgász × halfaj</option>
               <option value="records">Rekordok (legnagyobb hal fajonként)</option>
               <option value="month">Havonta</option>
               <option value="moon">Holdfázisonként</option>
+              <option value="pressure">Légnyomás szerint</option>
+              <option value="daypart">Napszak szerint</option>
+              <option value="temp">Hőmérséklet szerint</option>
+              <option value="wind">Szél szerint</option>
+              <option value="year">Évértékelő</option>
             </select>
           </div>
+          <select id="sSpecies" class="hidden stats-species" aria-label="Halfaj"></select>
         </div>
         <div id="statsOut"></div>
       </div>
@@ -377,6 +385,24 @@
         <div id="memberList"></div>
         <button class="btn block" type="button" id="btnMembersBack">Vissza</button>
       </div>
+    </section>
+
+    <!-- Karbantartás (csak admin): mentés, tárhely -->
+    <section id="viewAdmin" class="view hidden">
+      <div class="card">
+        <h2>Karbantartás</h2>
+        <h3>💾 Teljes mentés</h3>
+        <p class="hint">A Supabase ingyenes csomagja nem készít automatikus biztonsági mentést. Ezzel a gombbal minden adat (tagok, fogások, túrák, beszámolók, meghívók, idézetek) egy fájlba kerül, amit érdemes havonta letölteni és biztonságos helyre tenni. A fotók a fotótárban maradnak, a mentés az útvonalukat tartalmazza.</p>
+        <p class="hint" id="adminBackupInfo"></p>
+        <button type="button" class="btn primary" id="btnBackup">💾 Mentés letöltése</button>
+        <p class="msg" id="adminBackupMsg" role="status"></p>
+      </div>
+      <div class="card">
+        <h3>📊 Tárhely</h3>
+        <div id="adminUsage"></div>
+        <button type="button" class="btn small" id="btnUsageRefresh">Frissítés</button>
+      </div>
+      <div class="card"><button class="btn block" type="button" id="btnAdminBack">Vissza</button></div>
     </section>
 
     <!-- Napi idézetek (csak admin) -->
@@ -453,6 +479,8 @@
   <script src="vendor/qrcode/qrcode.js"></script>
   <script src="news.js"></script>
   <script src="quotes.js"></script>
+  <script src="tally.js"></script>
+  <script src="admin.js"></script>
   <script src="trips.js"></script>
   <script src="family.js"></script>
   <script src="records.js"></script>

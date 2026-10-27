@@ -23,6 +23,8 @@ window.TFTTrips = function (A) {
     albumCatch: null,    // album alsó szintje: a megnyitott fogás
     catchSort: "time",   // fogások: időrend | rangsor (súly szerint)
     editPost: null,
+    tallyView: (() => { try { return localStorage.getItem("tallyView") || "sum"; } catch (_) { return "sum"; } })(),
+    tallyDay: "", tallyTrip: null,
     wx: {},              // időjárás gyorsítótár
     map: null
   };
@@ -992,6 +994,7 @@ window.TFTTrips = function (A) {
       ${T.pickMode ? `<div class="card"><strong>Hozzáadható fogások (a túra előtti és utáni napot is mutatom)</strong>
         ${near.length ? `<ul class="pick-list">${near.map((c) => `<li><span>${esc(c.species)}${c.weight_kg != null ? " – " + esc(kg(c.weight_kg)) : ""}<small>${esc(A.anglerOf(c))} · ${esc(c.water)} · ${esc(dtFmt(c.caught_at))}</small></span>
           <button type="button" class="btn small" data-link-in="${esc(c.client_id)}">Hozzáad</button></li>`).join("")}</ul>` : `<p class="hint">Nincs ilyen fogás.</p>`}</div>` : ""}
+      ${cs.length && A.tally ? tallyCard(t, cs) : ""}
       ${cs.length > 1 ? `<div class="trip-sort"><div class="seg2" role="group" aria-label="Sorrend">
         <button type="button" data-trip-sort="time" class="${T.catchSort === "time" ? "active" : ""}" aria-pressed="${T.catchSort === "time"}">Időrend</button>
         <button type="button" data-trip-sort="rank" class="${T.catchSort === "rank" ? "active" : ""}" aria-pressed="${T.catchSort === "rank"}">Rangsor (súly)</button></div></div>` : ""}
@@ -999,6 +1002,32 @@ window.TFTTrips = function (A) {
         ${c._pending || !W() ? "" : `<div class="trip-catch-foot"><button type="button" class="link" data-link-out="${esc(c.client_id)}">Kivétel a túrából</button></div>`}</div>`).join("")
         : `<div class="card empty">Még nincs fogás ezen a túrán.</div>`}`;
     A.loadThumbs(out, cs);
+  }
+
+  // ---- Tabella (7.5): összesítő, egyedi súlyok, rangsor halfajonként; többnapos túránál napi bontás ----
+  const dayOf = (iso) => { const p = tzParts(new Date(iso)); return `${p.y}-${p.m}-${p.d}`; };
+  function tripDays(t) {
+    const days = [];
+    for (let x = ms(t.start_at); x <= ms(t.end_at); x += 3 * 3600000) { const k = dayOf(new Date(x).toISOString()); if (!days.includes(k)) days.push(k); }
+    const last = dayOf(t.end_at); if (!days.includes(last)) days.push(last);
+    return days;
+  }
+  function tallyCard(t, cs) {
+    if (T.tallyTrip !== t.id) { T.tallyTrip = t.id; T.tallyDay = ""; }
+    const days = tripDays(t);
+    if (T.tallyDay && !days.includes(T.tallyDay)) T.tallyDay = "";
+    const list = cs.filter((c) => !T.tallyDay || dayOf(c.caught_at) === T.tallyDay);
+    const view = T.tallyView || "sum";
+    const vbtn = (k, label) => `<button type="button" data-tally-view="${k}" class="${view === k ? "active" : ""}" aria-pressed="${view === k}">${label}</button>`;
+    const dbtn = (k, label) => `<button type="button" class="chip${(T.tallyDay || "") === k ? " active" : ""}" data-tally-day="${k}" aria-pressed="${(T.tallyDay || "") === k}">${label}</button>`;
+    const dayLabel = (k) => { const [, m, d] = k.split("-"); return `${m}.${d}.`; };
+    const body = view === "w" ? A.tally.weightsHtml(list) : view === "rank" ? A.tally.rankHtml(list) : A.tally.summaryHtml(list);
+    return `<div class="card tally">
+      <strong>Tabella</strong>
+      ${days.length > 1 ? `<div class="chips tally-days" role="group" aria-label="Nap">${dbtn("", "Összes nap")}${days.map((k, i) => dbtn(k, `${i + 1}. nap · ${dayLabel(k)}`)).join("")}</div>` : ""}
+      <div class="seg3" role="group" aria-label="Tabella nézet">${vbtn("sum", "Összesítő")}${vbtn("w", "Súlyok")}${vbtn("rank", "Rangsor")}</div>
+      <div class="tally-body">${body}</div>
+    </div>`;
   }
 
   // Rangsor: súly szerint csökkenő, azonos súlynál azonos helyezés; vendég és súly nélküli fogás helyezés nélkül a végén
@@ -1092,6 +1121,7 @@ window.TFTTrips = function (A) {
     const paths = A.catchPhotoPaths(c);
     const cov = A.coverPath(c);
     const ordered = cov ? [cov].concat(paths.filter((x) => x !== cov)) : paths;
+    const tripCov = coverOf(t), canCover = canEditTrip(t);
     out.innerHTML = `
       <div class="card album-sub-head">
         <button type="button" class="link" data-album-up>‹ Vissza az albumhoz</button>
@@ -1100,7 +1130,8 @@ window.TFTTrips = function (A) {
       </div>
       <div class="album-grid">
         ${ordered.map((path, i) => `<figure class="a-tile">
-          <button type="button" class="a-img" data-album-sub="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(path)}">${path === cov ? `<span class="a-cover">★ Listakép</span>` : ""}</button>
+          <button type="button" class="a-img" data-album-sub="${i}" aria-label="Kép megnyitása"><img alt="" loading="lazy" data-path="${esc(path)}">${path === tripCov ? `<span class="a-cover">Túraborító</span>` : path === cov ? `<span class="a-cover">★ Listakép</span>` : ""}</button>
+          ${canCover && path !== tripCov ? `<figcaption><span class="a-acts"><button type="button" class="link" data-set-cover="${esc(path)}">★ Legyen a túra borítója</button></span></figcaption>` : ""}
         </figure>`).join("")}
       </div>`;
     T.albumSub = { paths: ordered, caption: A.captionOf(c) };
@@ -1318,6 +1349,8 @@ window.TFTTrips = function (A) {
     }
     if (g("[data-trip-pick]")) { T.pickMode = !T.pickMode; render(); return; }
     if ((el = g("[data-trip-sort]"))) { T.catchSort = el.dataset.tripSort; render(); return; }
+    if ((el = g("[data-tally-view]"))) { T.tallyView = el.dataset.tallyView; try { localStorage.setItem("tallyView", T.tallyView); } catch (_) { /* nincs tároló */ } render(); return; }
+    if ((el = g("[data-tally-day]"))) { T.tallyDay = el.dataset.tallyDay; render(); return; }
     if ((el = g("[data-link-in]"))) return setLink(el.dataset.linkIn, true);
     if ((el = g("[data-link-out]"))) {
       if (confirm("Kiveszed ezt a fogást a túrából? (A fogás a naplóban megmarad.)")) setLink(el.dataset.linkOut, false);
