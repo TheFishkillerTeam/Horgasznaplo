@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "7.5";
+  const APP_VERSION = "8.0";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -230,6 +230,8 @@
   let quotes = null;    // Napi idézet (quotes.js)
   let tally = null;     // Tabella (tally.js)
   let admin = null;     // Karbantartás: mentés, tárhely (admin.js)
+  let cel = null;       // Ünnepi köszöntés, „Ma volt…” (celebrate.js)
+  let inst = null;      // Telepítés alkalmazásként (install.js)
   // Nézelődő: mindent lát, de semmit nem módosíthat
   const isViewer = () => !!(state.me && state.me.role === "viewer");
   const viewerOk = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
@@ -306,6 +308,14 @@
     if (typeof window.TFTNews === "function") news = window.TFTNews({ state, idb });
     if (typeof window.TFTQuotes === "function") quotes = window.TFTQuotes({ state, $, esc, toast, errText, idb, tzParts, show, renderHome: () => renderHome() });
     if (typeof window.TFTTally === "function") tally = window.TFTTally({ esc, numFmt, nameOf });
+    if (typeof window.TFTCelebrateUI === "function" && window.TFTCelebrate) cel = window.TFTCelebrateUI({
+      state, $, esc, toast, errText, numFmt, dtFmt, nameOf, callFn: (action, extra) => callFn(Object.assign({ action, url: APP_URL }, extra)),
+      entries: () => allEntries(), trips: () => (trips ? trips.all() : []),
+      openTrip: (id) => { if (trips) { showTab("tabTrips"); trips.open(id); } },
+      openCatch: (cid) => { location.hash = "#fogas-" + cid; openCatchFromHash(); },
+      afterSave: () => { if (!$("#viewMembers").classList.contains("hidden")) showMembers(); else if (state.tab === "tabHome") renderHome(); }
+    });
+    if (typeof window.TFTInstall === "function") { inst = window.TFTInstall({ $, toast, onChange: () => { if (state.tab === "tabHome" && !$("#viewMain").classList.contains("hidden")) renderHome(); } }); inst.refresh(); }
     if (typeof window.TFTAdmin === "function") admin = window.TFTAdmin({ state, $, esc, toast, errText, idb, tzParts, dtFmt, show, APP_VERSION, renderHome: () => renderHome() });
     if (typeof window.TFTTrips === "function") {
       trips = window.TFTTrips({ news, tally,
@@ -440,6 +450,7 @@
     $("#menuMembers").classList.toggle("hidden", !state.me.is_admin || isViewer());
     $("#menuQuotes").classList.toggle("hidden", !state.me.is_admin || isViewer());
     $("#menuAdmin").classList.toggle("hidden", !state.me.is_admin || isViewer());
+    $("#menuCel").classList.toggle("hidden", isViewer());
     show("viewMain");
     resetForm();
     fillDatalists();
@@ -464,7 +475,7 @@
     if (quotes) await quotes.loadDaily();
     if (admin) await admin.fetchUsage();
     try {
-      const pr = await state.sb.from("profiles").select("id, display_name, approved");
+      const pr = await state.sb.from("profiles").select("*");
       if (pr.error) throw pr.error;
       // A szerver lekérdezésenként legfeljebb 1000 sort ad, ezért lapozva töltjük le
       const PAGE = 1000;
@@ -492,6 +503,8 @@
     }
     if (trips) await trips.refresh();
     if (state.tab === "tabHome") renderHome();
+    // Ünnepi köszöntés: az adatok betöltése után, naponta egyszer
+    if (cel && (!isViewer() || viewerOk(state.me))) cel.maybePopup();
   }
 
   // ------------------------------------------------------------------
@@ -502,6 +515,7 @@
     authMode = mode;
     $$(".seg-btn").forEach((b) => b.classList.toggle("active", b.dataset.auth === mode));
     $$(".reg-only").forEach((el) => el.classList.toggle("hidden", mode !== "register"));
+    ["#regBM", "#regBD"].forEach((s) => { if ($(s)) $(s).required = mode === "register"; });
     $("#authSubmit").textContent = mode === "login" ? "Belépés" : "Regisztráció";
     $("#btnForgot").classList.toggle("hidden", mode !== "login");
     $("#authForm").password.autocomplete = mode === "login" ? "current-password" : "new-password";
@@ -528,9 +542,12 @@
       } else {
         const name = f.display_name.value.trim();
         if (!name) throw new Error("Add meg a nevet, ahogy a listákban megjelenjen.");
+        const bm = Number($("#regBM").value), bd = Number($("#regBD").value);
+        if (!bm || !bd) throw new Error("Add meg a születésnapodat (hónap és nap).");
+        if (cel && !cel.validMd(bm, bd)) throw new Error("Érvénytelen dátum – ellenőrizd a születésnapot.");
         const { data, error } = await state.sb.auth.signUp({
           email, password,
-          options: { data: { display_name: name }, emailRedirectTo: location.href.split("#")[0] }
+          options: { data: { display_name: name, birth_month: bm, birth_day: bd }, emailRedirectTo: location.href.split("#")[0] }
         });
         if (error) throw error;
         if (data.session) {
@@ -1203,7 +1220,9 @@
       ${viewer ? `<div class="card viewer-note">👀 <b>Nézelődőként</b> látod a naplót: mindent megnézhetsz, de nem módosíthatsz.
           <small>Hozzáférés: ${state.me.viewer_until ? "lejár " + esc(dtFmt(state.me.viewer_until)) + "-kor" : "korlátlan"}</small></div>`
         : `<button type="button" class="home-new" data-go="tabNew"><span aria-hidden="true">＋</span> Új fogás rögzítése</button>`}
+      ${inst ? inst.cardHtml() : ""}
       ${admin ? admin.homeHtml() : ""}
+      ${cel ? cel.homeHtml() : ""}
       ${mine ? `<button type="button" class="card home-alert" data-home-sync>⟳ ${mine} fogás feltöltésre vár – koppints a küldéshez</button>` : ""}
       <div class="home-grid">
         ${tile("tabLog", "☰", "Napló", `${all.length} fogás`, newLog ? `${newLog} új fogás` : "")}
@@ -2564,6 +2583,7 @@
         <div class="member">
           <div>${esc(p.display_name)}${p.is_admin ? " (admin)" : ""}
             <small>${p.approved ? "Jóváhagyva" : "Jóváhagyásra vár"} · regisztrált: ${esc(dtFmt(p.created_at))}</small>
+            ${cel ? cel.memberHtml(p) : ""}
           </div>
           ${p.id === state.uid ? "" : `<button type="button" class="btn small ${p.approved ? "danger" : "primary"}" data-member="${esc(p.id)}" data-ok="${p.approved ? "0" : "1"}">${p.approved ? "Letiltás" : "Jóváhagyás"}</button>`}
         </div>`).join("") + (viewers.length && family ? `<h3 class="members-sub">Nézelődők</h3>${family.viewerListHtml("members", viewers, "Nincs aktív hozzáférésű nézelődő.")}` : "")
@@ -2681,7 +2701,8 @@
         if (a === "rename") rename();
         if (a === "members") showMembers();
         if (a === "quotes" && quotes) quotes.open();
-        if (a === "admin" && admin) admin.open();
+        if (a === "admin" && admin) { admin.open(); if (cel && $("#celPreview")) $("#celPreview").innerHTML = cel.previewHtml(); }
+        if (a === "celebrations" && cel) cel.openEdit(state.uid);
         if (a === "push") { $("#menuPanel").classList.add("hidden"); currentPushSub().then((s) => (s ? disablePush() : enablePush())); }
         if (a === "pushtest") { $("#menuPanel").classList.add("hidden"); testPush(); }
       }

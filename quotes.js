@@ -9,7 +9,7 @@ window.TFTQuotes = function (A) {
   "use strict";
   const { state, $, esc, toast, errText, idb, tzParts } = A;
 
-  const Q = { today: null, day: null, list: [], editId: null, loading: false };
+  const Q = { today: null, day: null, list: [], editId: null, loading: false, shown: new Map(), cycleStart: null, nextStart: null };
   const isAdmin = () => !!(state.me && state.me.is_admin && state.me.role !== "viewer");
   const dayKey = () => { const p = tzParts(new Date()); return `${p.y}-${p.m}-${p.d}`; };
 
@@ -63,16 +63,56 @@ window.TFTQuotes = function (A) {
       const { data, error } = await state.sb.from("quotes").select("*").order("created_at");
       if (error) throw error;
       Q.list = (data || []).slice().sort((a, b) => String(a.created_at).localeCompare(String(b.created_at)));
+      await loadCycle();
       renderList();
     } catch (e) {
       box.innerHTML = `<p class="msg err">${esc(errText(e))}</p>`;
     }
   }
 
+  // Ciklus (kör): mely idézetek szerepeltek már a kör kezdete óta (8.0)
+  async function loadCycle() {
+    Q.shown = new Map(); Q.cycleStart = null; Q.nextStart = null;
+    try {
+      const st = await state.sb.from("app_settings").select("value").eq("key", "quote_cycle_start").maybeSingle();
+      if (st.error) throw st.error;
+      const start = st.data ? String(st.data.value) : null;
+      const today = dayKey();
+      if (start && start > today) { Q.nextStart = start; }
+      const { data, error } = await state.sb.from("quote_days").select("day, quote_id").order("day", { ascending: false });
+      if (error) throw error;
+      // A kör kezdete: ha holnaptól új kör indul, a mai az utolsó nap a régi körből
+      const from = start && start <= today ? start : null;
+      Q.cycleStart = from;
+      (data || []).forEach((r) => { if (r.quote_id && (!from || r.day >= from) && !Q.shown.has(r.quote_id)) Q.shown.set(r.quote_id, r.day); });
+      if (Q.nextStart) { Q.shown = new Map(); (data || []).filter((r) => r.day === today && r.quote_id).forEach((r) => Q.shown.set(r.quote_id, r.day)); }
+      Q.cycleOk = true;
+    } catch (e) {
+      Q.cycleOk = false;   // a 8.0-s adatbázis-frissítés még nem futott le
+    }
+  }
+  const md = (iso) => { const [, m, d] = String(iso).split("-"); return `${m}.${d}.`; };
+
+  async function restartCycle() {
+    if (!confirm("Új kört indítasz? A mai idézet marad, holnaptól minden idézet újra sorra kerül, új véletlen sorrendben.")) return;
+    try {
+      const { error } = await state.sb.rpc("restart_quote_cycle");
+      if (error) throw error;
+      toast("Új kör indul holnaptól.");
+      await loadList();
+    } catch (e) { toast(errText(e), 5000); }
+  }
+
   function renderList() {
     const box = $("#quoteList");
     if (!box) return;
     $("#quoteCount").textContent = `${Q.list.length} idézet`;
+    const cyc = $("#quoteCycle");
+    if (cyc) {
+      cyc.innerHTML = !Q.cycleOk ? `<p class="hint">A körök követéséhez a 8.0-s adatbázis-frissítés szükséges.</p>`
+        : `<div class="q-cycle"><span>${Q.nextStart ? `Új kör indul: <b>${esc(md(Q.nextStart))}</b>` : `Kör: <b>${Q.cycleStart ? esc(md(Q.cycleStart)) : "–"}</b> óta · <b>${Q.list.filter((q) => Q.shown.has(q.id)).length}</b> / ${Q.list.length} szerepelt`}</span>
+          <button type="button" class="btn small" id="btnQuoteRestart">🔄 Új kör indítása</button></div>`;
+    }
     box.innerHTML = Q.list.length ? Q.list.map((q) => {
       const isToday = Q.today && q.body === Q.today;
       if (Q.editId === q.id) {
@@ -83,6 +123,7 @@ window.TFTQuotes = function (A) {
       }
       return `<div class="quote-row${isToday ? " today" : ""}">
         <div class="quote-text">„${esc(q.body)}”${isToday ? ` <span class="tag">ma ez látszik</span>` : ""}</div>
+        ${Q.cycleOk ? `<small class="q-state ${Q.shown.has(q.id) ? "done" : ""}">${Q.shown.has(q.id) ? `✓ ebben a körben szerepelt: ${esc(md(Q.shown.get(q.id)))}` : "○ ebben a körben még nem szerepelt"}</small>` : ""}
         <div class="catch-actions"><button type="button" class="link" data-q-edit="${esc(q.id)}">Szerkesztés</button>
           <button type="button" class="link btn-danger-link" data-q-del="${esc(q.id)}">Törlés</button></div></div>`;
     }).join("") : `<p class="hint">Még nincs idézet. Az elsőt fent veheted fel.</p>`;
@@ -134,6 +175,7 @@ window.TFTQuotes = function (A) {
     const g = (sel) => e.target.closest(sel);
     let el;
     if (g("#btnQuoteAdd")) { add(); return; }
+    if (g("#btnQuoteRestart")) { restartCycle(); return; }
     if (g("#btnQuotesBack")) { A.show("viewMain"); if (state.tab === "tabHome") A.renderHome(); return; }
     if ((el = g("[data-q-edit]"))) { Q.editId = el.dataset.qEdit; renderList(); const t = document.querySelector(".quote-edit"); if (t) t.focus(); return; }
     if (g("[data-q-cancel]")) { Q.editId = null; renderList(); return; }

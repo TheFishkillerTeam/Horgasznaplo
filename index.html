@@ -19,7 +19,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="32" height="32">
-      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v7.5</small></span>
+      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v8.0</small></span>
     </div>
     <div class="topbar-right">
       <span id="netBadge" class="badge" title="Kapcsolat állapota">—</span>
@@ -34,6 +34,7 @@
     <button type="button" data-action="push" id="menuPush">🔔 Értesítések bekapcsolása</button>
     <button type="button" data-action="pushtest" id="menuPushTest" class="hidden">Próba-értesítés küldése</button>
     <button type="button" data-action="rename">Megjelenített név módosítása</button>
+    <button type="button" data-action="celebrations" id="menuCel">🎂 Születésnapom, névnapom</button>
     <button type="button" data-action="members" id="menuMembers" class="hidden">Tagok jóváhagyása</button>
     <button type="button" data-action="quotes" id="menuQuotes" class="hidden">💬 Idézetek</button>
     <button type="button" data-action="admin" id="menuAdmin" class="hidden">🛠 Karbantartás (mentés, tárhely)</button>
@@ -64,10 +65,18 @@
           <button type="button" class="seg-btn active" data-auth="login">Belépés</button>
           <button type="button" class="seg-btn" data-auth="register">Regisztráció</button>
         </div>
+        <div id="installSlot"></div>
         <form id="authForm" autocomplete="on">
           <label class="field reg-only hidden">Név (ahogy a listákban megjelenjen)
             <input name="display_name" type="text" maxlength="40" autocomplete="nickname">
           </label>
+          <div class="field reg-only hidden">Születésnap (év nélkül)
+            <div class="md-row">
+              <select id="regBM" aria-label="Születésnap hónapja"><option value="">hónap</option><option value="1">január</option><option value="2">február</option><option value="3">március</option><option value="4">április</option><option value="5">május</option><option value="6">június</option><option value="7">július</option><option value="8">augusztus</option><option value="9">szeptember</option><option value="10">október</option><option value="11">november</option><option value="12">december</option></select>
+              <select id="regBD" aria-label="Születésnap napja"><option value="">nap</option><option value="1">1.</option><option value="2">2.</option><option value="3">3.</option><option value="4">4.</option><option value="5">5.</option><option value="6">6.</option><option value="7">7.</option><option value="8">8.</option><option value="9">9.</option><option value="10">10.</option><option value="11">11.</option><option value="12">12.</option><option value="13">13.</option><option value="14">14.</option><option value="15">15.</option><option value="16">16.</option><option value="17">17.</option><option value="18">18.</option><option value="19">19.</option><option value="20">20.</option><option value="21">21.</option><option value="22">22.</option><option value="23">23.</option><option value="24">24.</option><option value="25">25.</option><option value="26">26.</option><option value="27">27.</option><option value="28">28.</option><option value="29">29.</option><option value="30">30.</option><option value="31">31.</option></select>
+            </div>
+            <small class="hint">A csapat ezen a napon felköszönt. Később a Menüben módosítható.</small>
+          </div>
           <label class="field">E-mail-cím
             <input name="email" type="email" required autocomplete="email">
           </label>
@@ -398,6 +407,10 @@
         <p class="msg" id="adminBackupMsg" role="status"></p>
       </div>
       <div class="card">
+        <h3>🎉 Ünnepi üzenetek</h3>
+        <div id="celPreview"></div>
+      </div>
+      <div class="card">
         <h3>📊 Tárhely</h3>
         <div id="adminUsage"></div>
         <button type="button" class="btn small" id="btnUsageRefresh">Frissítés</button>
@@ -416,6 +429,7 @@
         <button type="button" class="btn primary small" id="btnQuoteAdd">＋ Hozzáadás</button>
       </div>
       <div class="card">
+        <div id="quoteCycle"></div>
         <div id="quoteList"></div>
         <button class="btn block" type="button" id="btnQuotesBack">Vissza</button>
       </div>
@@ -481,6 +495,9 @@
   <script src="quotes.js"></script>
   <script src="tally.js"></script>
   <script src="admin.js"></script>
+  <script src="celebrate-core.js"></script>
+  <script src="celebrate.js"></script>
+  <script src="install.js"></script>
   <script src="trips.js"></script>
   <script src="family.js"></script>
   <script src="records.js"></script>
