@@ -1,4 +1,4 @@
-# Horgásznapló – 8.0
+# Horgásznapló – 8.1
 
 Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes app (PWA) Android és iPhone telefonra.
 

@@ -184,9 +184,7 @@ window.TFTCelebrateUI = function (A) {
         return `<button type="button" class="mem-row" data-mem-catch="${esc(c.client_id)}">${when}<span class="mem-what">🐟 ${esc(C.memoryLine(m, A.nameOf))}${m.more ? ` <small class="hint">és még ${m.more} fogás</small>` : ""}</span></button>`;
       }).join("")}</div>`;
     }
-    if (isMember() && state.me && !state.me.birth_month) {
-      h += `<button type="button" class="card home-alert" data-cel-edit="${esc(state.uid)}">🎂 Add meg a születésnapodat (hónap, nap), hogy a csapat felköszönthessen!</button>`;
-    }
+    // A meglévő tagok dátumait az admin tölti fel (meglepetés) – a kezdőlap nem kéri (8.1)
     return h;
   }
 
