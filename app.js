@@ -6,7 +6,7 @@
   "use strict";
 
   // Verziószám: új modul / funkció → főszám, kisebb javítás → alszám
-  const APP_VERSION = "8.1";
+  const APP_VERSION = "9.0";
   const CFG = window.APP_CONFIG || {};
   const TZ = CFG.TIMEZONE || "Europe/Budapest";
   const $ = (sel, root = document) => root.querySelector(sel);
@@ -232,6 +232,7 @@
   let admin = null;     // Karbantartás: mentés, tárhely (admin.js)
   let cel = null;       // Ünnepi köszöntés, „Ma volt…” (celebrate.js)
   let inst = null;      // Telepítés alkalmazásként (install.js)
+  let act = null;       // Tagok aktivitása (activity.js, 9.0)
   // Nézelődő: mindent lát, de semmit nem módosíthat
   const isViewer = () => !!(state.me && state.me.role === "viewer");
   const viewerOk = (p) => !!(p && p.approved && (!p.viewer_until || new Date(p.viewer_until).getTime() > Date.now()));
@@ -274,6 +275,7 @@
     if (tabId === "tabGallery") renderGallery();
     if (tabId === "tabStats") renderStats();
     if (tabId === "tabTrips" && trips) trips.render();
+    if (tabId === "tabNew" && !state.editing && isRecentTime()) prefillFromActiveTrip();
     if (tabId === "tabNew" && !state.gps && !state.editing && isRecentTime()) requestGps(true);
     window.scrollTo(0, 0);
   }
@@ -316,6 +318,7 @@
       afterSave: () => { if (!$("#viewMembers").classList.contains("hidden")) showMembers(); else if (state.tab === "tabHome") renderHome(); }
     });
     if (typeof window.TFTInstall === "function") { inst = window.TFTInstall({ $, toast, onChange: () => { if (state.tab === "tabHome" && !$("#viewMain").classList.contains("hidden")) renderHome(); } }); inst.refresh(); }
+    if (typeof window.TFTActivity === "function") act = window.TFTActivity({ state, esc, tzParts });
     if (typeof window.TFTAdmin === "function") admin = window.TFTAdmin({ state, $, esc, toast, errText, idb, tzParts, dtFmt, show, APP_VERSION, renderHome: () => renderHome() });
     if (typeof window.TFTTrips === "function") {
       trips = window.TFTTrips({ news, tally,
@@ -325,7 +328,7 @@
       });
     }
     if (typeof window.TFTFamily === "function") {
-      family = window.TFTFamily({ state, $, esc, dtFmt, toast, errText, nameOf, show, enterApp, showMembers, APP_URL, CFG });
+      family = window.TFTFamily({ state, $, esc, dtFmt, toast, errText, nameOf, show, enterApp, showMembers, APP_URL, CFG, activityHtml: (id) => (act ? act.html(id) : "") });
     }
     if (typeof window.TFTRecords === "function") {
       records = window.TFTRecords({ $, esc, numFmt, dtFmt, tzParts, nameOf, allEntries, cardHtml, loadThumbs, trips,
@@ -505,6 +508,7 @@
     if (state.tab === "tabHome") renderHome();
     // Ünnepi köszöntés: az adatok betöltése után, naponta egyszer
     if (cel && (!isViewer() || viewerOk(state.me))) cel.maybePopup();
+    if (act) act.touch(false);
   }
 
   // ------------------------------------------------------------------
@@ -662,6 +666,7 @@
     const keepWater = wasEditing ? "" : f.water.value;
     f.reset();
     f.water.value = keepWater; // ugyanazon a vízen általában több hal is jön
+    if (forEdit || wasEditing) state.autoPlace = null;
     setCatchTime(new Date());
     clearPhoto();
     state.photoRemoved = false;
@@ -870,6 +875,54 @@
     // Más forrású hely (GPS, térkép, törlés) esetén a „Korábbi helyek” választás már nem érvényes
     if (!loc || loc.source !== "list") { const sel = $("#prevPlaces"); if (sel) sel.value = ""; const m = $("#placeMsg"); if (m) m.textContent = ""; }
     renderLocation();
+    if (loc && (loc.source === "gps" || loc.source === "map")) autoPlaceFromPos(loc);
+  }
+
+  // 9.0: a pozíció egy korábbi fogás 50 m-es körzetében → vízterület + állás kitöltése
+  const NEAR_M = 50;
+  function distM(aLat, aLon, bLat, bLon) {
+    const R = 6371000, r = Math.PI / 180;
+    const dLat = (bLat - aLat) * r, dLon = (bLon - aLon) * r;
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(aLat * r) * Math.cos(bLat * r) * Math.sin(dLon / 2) ** 2;
+    return 2 * R * Math.asin(Math.min(1, Math.sqrt(h)));
+  }
+  function nearestPlace(lat, lon) {
+    let best = null;
+    state.catches.concat(state.outbox).forEach((c) => {
+      if (c.lat == null || c.lon == null || !(c.water || "").trim()) return;
+      if (state.editing && c.client_id === state.editing.original.client_id) return;
+      const d = distM(lat, lon, Number(c.lat), Number(c.lon));
+      if (d <= NEAR_M && (!best || d < best.d)) best = { d, water: c.water.trim(), spot: (c.spot || "").trim() };
+    });
+    return best;
+  }
+  function autoPlaceFromPos(loc) {
+    if (state.editing) return;
+    const f = $("#catchForm");
+    const w = f.water.value.trim(), sp = f.spot.value.trim(), a = state.autoPlace;
+    // Kézzel beírt adatot nem írunk felül
+    const free = (!w || (a && w === a.water)) && (!sp || (a && sp === a.spot));
+    if (!free) return;
+    const p = nearestPlace(loc.lat, loc.lon);
+    if (!p) return;
+    f.water.value = p.water; f.spot.value = p.spot;
+    state.autoPlace = { water: p.water, spot: p.spot };
+    const m = $("#placeMsg");
+    m.className = "msg ok";
+    m.textContent = `📍 Korábbi hely ${Math.round(p.d)} m-re: ${p.water}${p.spot ? " – " + p.spot : ""}. Kitöltöttem – ha nem ez, írd át.`;
+  }
+  // 9.0: futó túra alatt a vízterület a túrából
+  function prefillFromActiveTrip() {
+    if (state.editing || state.tripCtx || !trips || !trips.activeTripFor) return;
+    const f = $("#catchForm");
+    if (f.water.value.trim()) return;   // már kitöltve (kézzel vagy az előző fogásból)
+    const t = trips.activeTripFor(state.uid);
+    if (!t || !(t.water || "").trim()) return;
+    f.water.value = t.water.trim();
+    state.autoPlace = { water: t.water.trim(), spot: "", trip: t.id };
+    const m = $("#placeMsg");
+    m.className = "msg ok";
+    m.textContent = `⚑ Futó túra: ${t.title} – vízterület kitöltve.`;
   }
 
   function renderLocation() {
@@ -963,6 +1016,7 @@
     const msg = $("#placeMsg");
     if (!p) { msg.textContent = ""; return; }
     const f = $("#catchForm");
+    state.autoPlace = null;
     if (p.water) f.water.value = p.water;
     if (p.spot) f.spot.value = p.spot;
     const what = `${p.water}${p.spot ? " – " + p.spot : ""}`;
@@ -2577,12 +2631,14 @@
       const { data, error } = await state.sb.from("profiles").select("*")
         .order("approved").order("created_at", { ascending: false });
       if (error) throw error;
+      if (act) await act.load();
       const members = data.filter((p) => p.role !== "viewer");
       const viewers = data.filter((p) => p.role === "viewer");
       box.innerHTML = members.map((p) => `
         <div class="member">
           <div>${esc(p.display_name)}${p.is_admin ? " (admin)" : ""}
             <small>${p.approved ? "Jóváhagyva" : "Jóváhagyásra vár"} · regisztrált: ${esc(dtFmt(p.created_at))}</small>
+            ${act ? act.html(p.id) : ""}
             ${cel ? cel.memberHtml(p) : ""}
           </div>
           ${p.id === state.uid ? "" : `<button type="button" class="btn small ${p.approved ? "danger" : "primary"}" data-member="${esc(p.id)}" data-ok="${p.approved ? "0" : "1"}">${p.approved ? "Letiltás" : "Jóváhagyás"}</button>`}

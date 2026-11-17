@@ -702,3 +702,19 @@ h3 { margin: 0 0 8px; font-size: 16px; }
 .inst-steps li { margin: 8px 0; }
 .ios-share { vertical-align: -5px; color: #1c7ed6; }
 .ios-arrow { text-align: center; font-size: 34px; color: #1c7ed6; animation: bob 1.2s ease-in-out infinite; }
+
+/* Tagok aktivitása (9.0) – csak admin látja */
+small.act, .member small.act { display: flex; align-items: center; gap: 7px; margin-top: 2px; color: var(--muted); }
+small.act.act-live, .member small.act.act-live { color: var(--good); font-weight: 600; }
+.act .act-dot { display: inline-block; flex: 0 0 9px; width: 9px; height: 9px; border-radius: 50%; background: var(--good); box-shadow: 0 0 0 3px color-mix(in srgb, var(--good) 22%, transparent); }
+small.act.act-none { font-style: italic; }
+.from-catches:empty { display: none; }
+.from-catches .chips { margin-top: 6px; }
+
+/* Fogás: egységes Hely blokk (9.0) */
+fieldset.place-block { margin: 12px 0 0; min-width: 0; }
+fieldset.place-block legend { font-weight: 700; padding: 0 6px; margin-left: -4px; }
+.place-block .field { margin: 2px 0; }
+.place-block .msg:empty { display: none; }
+.pos-row { border-top: 1px dashed var(--line); padding-top: 8px; margin-top: 2px; }
+.pos-label { font-size: 13px; font-weight: 600; color: var(--muted); }

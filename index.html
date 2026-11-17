@@ -19,7 +19,7 @@
   <header class="topbar">
     <div class="brand">
       <img src="icons/icon-192.png" alt="" width="32" height="32">
-      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v8.1</small></span>
+      <span class="brand-text"><span id="clubName">The Fishkiller Team (TFT)</span><small>Horgásznapló</small><small class="app-ver" id="appVer">v9.0</small></span>
     </div>
     <div class="topbar-right">
       <span id="netBadge" class="badge" title="Kapcsolat állapota">—</span>
@@ -224,14 +224,28 @@
           <p class="hint">Utólagos rögzítésnél állítsd be a fogás valódi idejét. Az időjárás és a holdfázis ehhez az időponthoz készül, nem a mentés idejéhez.</p>
           <p id="lateWarn" class="msg warn hidden" role="status"></p>
 
-          <label class="field">Vízterület *
-            <input name="water" list="waterList" required maxlength="80" placeholder="pl. Zagyva, jászberényi szakasz">
-          </label>
-          <datalist id="waterList"></datalist>
-
-          <label class="field">Helyszín / állás
-            <input name="spot" maxlength="80" placeholder="pl. 12-es stég">
-          </label>
+          <fieldset class="gps place-block">
+            <legend>📍 Hely</legend>
+            <label class="field loc-prev">Korábbi helyek
+              <select id="prevPlaces"><option value="">— válassz a korábbi fogáshelyek közül —</option></select>
+            </label>
+            <p id="placeMsg" class="msg" role="status"></p>
+            <label class="field">Vízterület *
+              <input name="water" list="waterList" required maxlength="80" placeholder="pl. Zagyva, jászberényi szakasz">
+            </label>
+            <datalist id="waterList"></datalist>
+            <label class="field">Helyszín / állás
+              <input name="spot" maxlength="80" placeholder="pl. 12-es stég">
+            </label>
+            <div class="pos-row"><span class="pos-label">Pozíció (időjáráshoz, térképhez)</span>
+              <div id="gpsStatus" class="hint">Még nincs megadva.</div></div>
+            <div class="loc-actions">
+              <button type="button" class="btn small" id="btnGps">📍 Jelenlegi helyem</button>
+              <button type="button" class="btn small" id="btnMap">🗺 Térképen</button>
+              <button type="button" class="btn small hidden" id="btnLocClear">Törlés</button>
+            </div>
+            <p class="hint">Ha a pozíció egy korábbi hely 50 m-es körzetében van, a vízterületet és az állást kitöltöm.</p>
+          </fieldset>
 
           <div class="row2">
             <label class="field">Csali
@@ -261,19 +275,6 @@
             <textarea name="note" rows="2" maxlength="500"></textarea>
           </label>
 
-          <div class="gps">
-            <strong>A fogás helye</strong>
-            <div id="gpsStatus" class="hint">Még nincs megadva.</div>
-            <div class="loc-actions">
-              <button type="button" class="btn small" id="btnGps">📍 Jelenlegi helyem</button>
-              <button type="button" class="btn small" id="btnMap">🗺 Térképen</button>
-              <button type="button" class="btn small hidden" id="btnLocClear">Törlés</button>
-            </div>
-            <label class="field loc-prev">Korábbi helyek
-              <select id="prevPlaces"><option value="">— válassz a korábbi fogáshelyek közül —</option></select>
-            </label>
-            <p id="placeMsg" class="msg" role="status"></p>
-          </div>
           <p class="hint">Az időjárási adatokat (hőmérséklet, légnyomás, szélirány és -sebesség) az app a fogás helye és időpontja alapján automatikusan rögzíti, amint van internetkapcsolat. A holdfázist az időpontból számolja, ehhez nem kell internet. Időjárási adatok: <a href="https://open-meteo.com/" target="_blank" rel="noopener">Open-Meteo.com</a> (CC BY 4.0).</p>
 
           <button class="btn primary block" type="submit" id="btnSave">Mentés</button>
@@ -495,6 +496,7 @@
   <script src="quotes.js"></script>
   <script src="tally.js"></script>
   <script src="admin.js"></script>
+  <script src="activity.js"></script>
   <script src="celebrate-core.js"></script>
   <script src="celebrate.js"></script>
   <script src="install.js"></script>

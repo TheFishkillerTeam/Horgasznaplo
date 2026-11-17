@@ -285,7 +285,8 @@ window.TFTFamily = function (A) {
     return `<div class="viewer-row${ok ? "" : " expired"}">
       <div class="vr-main"><b>${esc(p.display_name || "Vendég")}</b> <span class="tag nezo">nézelődő</span>
         <small>${ok ? `Aktív · ${p.viewer_until ? "lejár: " + esc(untilText(p)) : "korlátlan"}` : `Lejárt${p.viewer_until ? " · " + esc(untilText(p)) : ""}`}
-          ${p.invited_by ? ` · meghívta: ${esc(A.nameOf(p.invited_by))}` : ""}${p.invited_at ? `, ${esc(dtFmt(p.invited_at))}` : ""}</small></div>
+          ${p.invited_by ? ` · meghívta: ${esc(A.nameOf(p.invited_by))}` : ""}${p.invited_at ? `, ${esc(dtFmt(p.invited_at))}` : ""}</small>
+        ${A.activityHtml ? A.activityHtml(p.id) : ""}</div>
       ${acts.filter(Boolean).length ? `<div class="vr-acts">${acts.join("")}</div>` : ""}
     </div>`;
   }

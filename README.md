@@ -1,4 +1,4 @@
-# Horgásznapló – 8.1
+# Horgásznapló – 9.0
 
 Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes app (PWA) Android és iPhone telefonra.
 
@@ -22,6 +22,8 @@ Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes 
 - Túra tabella (összesítő, egyedi súlyok, rangsor halfajonként, napi bontás); Összesítők: horgász × halfaj, holdfázis / légnyomás / napszak / hőmérséklet / szél halfaj-szűrővel, évértékelő
 - Egyéni csúcs jelzése; admin: teljes mentés JSON-ba, tárhelyfigyelés
 - Születésnap, névnap, ünnepek (karácsony, újév, húsvét, halloween): felugró köszöntés animált grafikával, reggel 8-as értesítés; „Ma volt…” évfordulós emlékek; idézet-kör követése; „Telepítés alkalmazásként” gomb
+- Fogáshely egy blokkban: korábbi hely 50 m-en belül → vízterület és állás magától; futó túra alatt a vízterület a túrából; utólag létrehozott túránál a hely a fogásokból
+- Admin: tagok utolsó aktivitása, „Most aktív” jelzés
 - Nézelődők (korábban: családtagok): meghívás képernyőn megjelenő QR-kóddal vagy linkkel (e-mail, üzenet); tag 1 napra, admin tetszőleges időre vagy korlátlanul; a nézők csak megtekinthetnek, értesítést nem kapnak
 
 ## Fájlok
@@ -39,6 +41,7 @@ Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes 
 | `celebrate-core.js` | Ünnepek, emlékek számítása (az `ertesites` függvénnyel közös kód) |
 | `celebrate.js` | Ünnepi felugró ablak, „Ma volt…”, születésnap / névnap megadása |
 | `install.js` | „Telepítés alkalmazásként” gomb |
+| `activity.js` | Tagok aktivitása (admin: „Most aktív”, utolsó aktivitás) |
 | `config.js` | **Ide kell beírni a Supabase URL-t és kulcsot** |
 | `supabase.js` | Supabase kliens könyvtár (v2.117.3) |
 | `sw.js`, `manifest.webmanifest`, `icons/` | Telepíthetőség és offline működés |
@@ -47,6 +50,7 @@ Baráti társaság horgászfogásainak nyilvántartása – telepíthető webes 
 | `supabase_frissites_v3.sql` | Frissítés a 2. verzióról a 3.-ra (Supabase SQL Editor) |
 | `supabase_frissites_v5.sql` | Frissítés a 4. verzióról az 5.0-ra – borítókép, képek készítési ideje (Supabase SQL Editor) |
 | `supabase_frissites_v4.sql` | Frissítés a 3. verzióról a 4.-re – túranapló (Supabase SQL Editor) |
+| `supabase_frissites_v9.sql` | Frissítés a 8.x verzióról a 9.0-ra – tagok aktivitása (Supabase SQL Editor) |
 | `supabase_frissites_v8.sql` | Frissítés a 7.5 verzióról a 8.0-ra (Supabase SQL Editor) |
 | `supabase_idozito_v8.sql` | A reggel 8-as értesítés időzítője (a v8 SQL után) |
 | `supabase_frissites_v7_5.sql` | Frissítés a 7.4 verzióról a 7.5-re – tárhelyfigyelés (Supabase SQL Editor) |

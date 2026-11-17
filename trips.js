@@ -157,6 +157,15 @@ window.TFTTrips = function (A) {
     return `<span class="trip-news"><span class="news-dot" aria-hidden="true"></span>${esc(parts.join(" · "))}</span>`;
   }
 
+  // Futó túra a fogás-űrlaphoz (9.0): ahol a tag résztvevő; ha nincs ilyen, az egyetlen futó túra
+  function activeTripFor(uid, now = Date.now()) {
+    const act = T.trips.filter((t) => status(t, now) === "active");
+    const mine = act.filter((t) => T.people.some((p) => p.trip_id === t.id && p.user_id === uid && p.rsvp !== "no"));
+    if (mine.length === 1) return mine[0];
+    if (!mine.length && act.length === 1) return act[0];
+    return null;
+  }
+
   // Résztvevők: a felvett sorok + akik fogást rögzítettek a túrán (automatikusan)
   function peopleOf(t) {
     const rows = T.people.filter((p) => p.trip_id === t.id).map((p) => Object.assign({}, p));
@@ -459,6 +468,7 @@ window.TFTTrips = function (A) {
           <input name="water" list="waterList" maxlength="80" required placeholder="pl. Zagyva" value="${esc(t ? t.water : pf ? pf.water : "")}">
         </label>
         <p class="hint">A túrához automatikusan azok a fogások kerülnek, amelyek az alábbi időszakban, ezen a vízterületen születtek. A „Zagyva” túrához a „Zagyva, jászberényi szakasz” fogás is odakerül.</p>
+        <div id="tripFromCatches" class="from-catches" role="status"></div>
         <div class="field">Kezdés *
           <div class="row2 dt-row">
             <input name="sd" data-fmt="date" inputmode="numeric" placeholder="ÉÉÉÉ.HH.NN" maxlength="10" autocomplete="off" value="${fmtDate(s)}" aria-label="Kezdés dátuma">
@@ -498,6 +508,8 @@ window.TFTTrips = function (A) {
         <p class="msg" id="tripFormMsg" role="status"></p>
       </form>`;
     renderLoc();
+    T.auto = { water: null, loc: false };
+    if (!t && !pf) suggestFromCatches();
   }
 
   function placeOptions() {
@@ -555,6 +567,7 @@ window.TFTTrips = function (A) {
     // Másik helymegadás: a listás választás már nem érvényes
     const sel = $("#tripPrevPlaces"); if (sel) sel.value = "";
     const m = $("#tripPlaceMsg"); if (m) m.textContent = "";
+    if (T.auto) T.auto.loc = false;   // kézi helymegadás: a fogásokból számolt hely nem írja felül
     if (kind === "clear") { T.loc = null; renderLoc(); return; }
     if (kind === "gps") {
       if (!("geolocation" in navigator)) { toast("Ez a készülék nem támogatja a helymeghatározást."); return; }
@@ -574,6 +587,8 @@ window.TFTTrips = function (A) {
     if (!p) { msg.textContent = ""; return; }
     const f = $("#tripForm");
     if (p.water) f.water.value = p.water;
+    if (T.auto) { T.auto.loc = false; T.auto.water = null; }
+    const fc = $("#tripFromCatches"); if (fc) fc.innerHTML = "";
     if (p.lat != null) {
       T.loc = { lat: p.lat, lon: p.lon };
       msg.className = "msg ok"; msg.textContent = `✓ ${p.water}: vízterület és hely beállítva (a legutóbbi helymeghatározásos fogás alapján).`;
@@ -581,6 +596,65 @@ window.TFTTrips = function (A) {
       msg.className = "msg warn"; msg.textContent = `✓ ${p.water}: vízterület beírva. GPS-pozíció ehhez nincs – az időjáráshoz jelöld ki a helyet a térképen.`;
     }
     renderLoc();
+  }
+
+  // ------------------------------------------------------------------
+  // Utólag létrehozott túra: a hely a túra időszakában született fogásokból (9.0)
+  // Egy vízterület → automatikus kitöltés; több → választás (nem döntünk helyette)
+  // ------------------------------------------------------------------
+  function catchGroups(s, e) {
+    const groups = new Map();
+    (A.everyEntry() || []).forEach((c) => {
+      const x = ms(c.caught_at);
+      if (!(x >= ms(s) && x <= ms(e)) || !(c.water || "").trim()) return;
+      const name = baseWater(c.water) || c.water.trim();
+      const key = normWater(name);
+      const g = groups.get(key) || { names: {}, n: 0, pts: [] };
+      g.names[name] = (g.names[name] || 0) + 1;
+      g.n++;
+      if (c.lat != null && c.lon != null) g.pts.push([Number(c.lat), Number(c.lon)]);
+      groups.set(key, g);
+    });
+    const top = (o) => Object.keys(o).sort((a, b) => o[b] - o[a])[0];
+    return Array.from(groups.values()).map((g) => ({
+      water: top(g.names), n: g.n,
+      loc: g.pts.length ? { lat: g.pts.reduce((a, p) => a + p[0], 0) / g.pts.length, lon: g.pts.reduce((a, p) => a + p[1], 0) / g.pts.length } : null
+    })).sort((a, b) => b.n - a.n || a.water.localeCompare(b.water, "hu"));
+  }
+  function applyGroup(g, auto) {
+    const f = $("#tripForm");
+    if (!f) return;
+    f.water.value = g.water;
+    T.auto.water = g.water;
+    if (g.loc && (!T.loc || T.auto.loc)) { T.loc = { lat: g.loc.lat, lon: g.loc.lon }; T.auto.loc = true; renderLoc(); }
+    const sel = $("#tripPrevPlaces"); if (sel) sel.value = "";
+    const m = $("#tripPlaceMsg"); if (m) m.textContent = "";
+    const box = $("#tripFromCatches");
+    if (box) box.innerHTML = `<p class="msg ok">✓ ${g.n} fogás alapján: <b>${esc(g.water)}</b> – vízterület${g.loc ? " és hely" : ""} ${auto ? "kitöltve" : "beállítva"}.${g.loc ? "" : " A fogásoknál nincs GPS-pozíció, a helyet a térképen jelölheted ki."}</p>`;
+  }
+  function suggestFromCatches() {
+    const f = $("#tripForm"), box = $("#tripFromCatches");
+    if (!f || !box || T.editId || T.prefill) return;
+    const s = parseDT(f.sd.value, f.st.value), e = parseDT(f.ed.value, f.et.value);
+    if (!s || !e || e <= s) { box.innerHTML = ""; return; }
+    const groups = catchGroups(s.toISOString(), e.toISOString());
+    T.groups = groups;
+    // A kézzel beírt vízterületet nem írjuk felül
+    const typed = f.water.value.trim() && f.water.value.trim() !== T.auto.water;
+    if (!groups.length) {
+      if (T.auto.water && f.water.value.trim() === T.auto.water) { f.water.value = ""; T.auto.water = null; }
+      if (T.auto.loc) { T.loc = null; T.auto.loc = false; renderLoc(); }
+      box.innerHTML = "";
+      return;
+    }
+    if (groups.length === 1) {
+      if (typed) { box.innerHTML = waterMatch(f.water.value, groups[0].water) ? "" : `<p class="msg warn">Ebben az időszakban ${groups[0].n} fogás a(z) <b>${esc(groups[0].water)}</b> vízterületen született. <button type="button" class="link" data-trip-grp="0">Ezt használom</button></p>`; return; }
+      applyGroup(groups[0], true);
+      return;
+    }
+    if (!typed && T.auto.water && f.water.value.trim() === T.auto.water) { f.water.value = ""; T.auto.water = null; if (T.auto.loc) { T.loc = null; T.auto.loc = false; renderLoc(); } }
+    box.innerHTML = `<div class="msg warn">Ebben az időszakban több helyen is volt fogás. Melyik a túra helye?
+      <div class="chips">${groups.map((g, i) => `<button type="button" class="chip" data-trip-grp="${i}">${esc(g.water)} – ${g.n} fogás</button>`).join("")}</div></div>`;
   }
 
   async function saveForm(ev) {
@@ -1332,7 +1406,8 @@ window.TFTTrips = function (A) {
     if ((el = g("[data-trip-edit]"))) return openForm(el.dataset.tripEdit);
     if ((el = g("[data-trip-del]"))) return deleteTrip(el.dataset.tripDel);
     if ((el = g("[data-trip-sec]"))) { T.sec = el.dataset.tripSec; T.pickMode = false; T.albumCatch = null; render(); return; }
-    if ((el = g("[data-trip-chip]"))) return formChip(el.dataset.tripChip);
+    if ((el = g("[data-trip-chip]"))) { formChip(el.dataset.tripChip); suggestFromCatches(); return; }
+    if ((el = g("[data-trip-grp]"))) { const gr = (T.groups || [])[Number(el.dataset.tripGrp)]; if (gr) applyGroup(gr, false); return; }
     if ((el = g("[data-trip-loc]"))) return formLoc(el.dataset.tripLoc);
     if ((el = g("[data-rsvp]"))) return setRsvp(el.dataset.rsvp);
     if (g("[data-add-member]")) { const v = $("#addMember").value; if (v) addPerson({ user_id: v }); return; }
@@ -1377,7 +1452,7 @@ window.TFTTrips = function (A) {
     document.addEventListener("click", onClick);
     const tab = $("#tabTrips");
     tab.addEventListener("input", (e) => {
-      if (e.target.dataset.fmt) onFormInput(e);
+      if (e.target.dataset.fmt) { onFormInput(e); clearTimeout(T.sugT); T.sugT = setTimeout(suggestFromCatches, 300); }
       if (e.target.id === "tripSearch") { T.q = e.target.value; renderListBody(); }
       if (e.target.dataset.qMemo != null) { const q = T.queue[Number(e.target.dataset.qMemo)]; if (q) q.memo = e.target.value; }
     });
@@ -1416,7 +1491,7 @@ window.TFTTrips = function (A) {
 
   bind();
   return {
-    homeInfo,
+    homeInfo, activeTripFor,
     refresh, loadCache, render, open, openFromHash, tripsOfCatch, tripById, all: () => T.trips,
     // teszteléshez
     _: { waterMatch, status, catchesOf, peopleOf, keyToMs, suggestions, newsOf, T }
